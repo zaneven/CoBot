@@ -1,0 +1,24 @@
+# CoBot configuration.
+
+# Dev root directories whose immediate subdirectories are switchable projects.
+# Use /projects in Telegram to list them and tap to switch the active project.
+devRoots:
+  - /Users/a1/Develop
+
+# Additional explicitly whitelisted project paths (outside the dev roots).
+projects:
+  - /Users/a1/.hermes
+
+defaults:
+  # model: claude-sonnet-5   # leave unset to use your Claude Code default
+
+telegram:
+  maxEditChars: 3500
+  pollTimeout: 30
+  flushMs: 900        # ms between streamed edits (lower = snappier, more API calls)
+  showToolCalls: false  # true = stream Bash/Read/Write etc. to chat; false = only show final text
+
+hermes:
+  enabled: false
+  # apiUrl: http://127.0.0.1:8642
+  # apiKey: ${HERMES_API_KEY}

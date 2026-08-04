@@ -1,0 +1,27 @@
+# CoBot configuration. Copy to config.yaml and edit.
+# Paths here are whitelisted for /bind (the bot will only bind TG chats to these dirs).
+
+# Project working directories the bot may drive Claude Code in.
+projects:
+  - /Users/a1/Develop/CoBot
+  # - /Users/a1/Develop/prototype
+  # - /Users/a1/.hermes
+
+# Per-project defaults (optional).
+defaults:
+  # model: claude-sonnet-5
+  # maxTurns: 50
+
+# Streaming to Telegram: edit the same message up to this many chars, then append a new one.
+telegram:
+  maxEditChars: 3500
+  # Polling timeout (seconds) for getUpdates long-polling.
+  pollTimeout: 30
+  # Milliseconds between streamed message edits (snappier vs fewer API calls).
+  flushMs: 900
+
+# Optional Hermes backend.
+hermes:
+  enabled: false
+  # apiUrl: http://127.0.0.1:8642
+  # apiKey: ${HERMES_API_KEY}
