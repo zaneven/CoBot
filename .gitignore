@@ -7,4 +7,9 @@ data/
 *.db
 *.db-*
 !.env.example
+config.yaml
+.DS_Store
+*.swp
+*.sock
+nohup.out
 tmp_*.ts

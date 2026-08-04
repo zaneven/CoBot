@@ -1,27 +1,19 @@
 # CoBot configuration. Copy to config.yaml and edit.
 # Paths here are whitelisted for /bind (the bot will only bind TG chats to these dirs).
 
-# Project working directories the bot may drive Claude Code in.
+# Dev root directories whose immediate subdirectories are switchable projects.
+# Use /projects in Telegram to list them and tap to switch the active project.
+devRoots:
+  - /Users/YOU/Develop
+
+# Additional explicitly whitelisted project paths (outside the dev roots).
+# Useful for directories like ~/.hermes that aren't top-level dev projects.
 projects:
-  - /Users/a1/Develop/CoBot
-  # - /Users/a1/Develop/prototype
-  # - /Users/a1/.hermes
+  # - /Users/YOU/.hermes
 
-# Per-project defaults (optional).
-defaults:
-  # model: claude-sonnet-5
-  # maxTurns: 50
-
-# Streaming to Telegram: edit the same message up to this many chars, then append a new one.
+# Streaming display options.
 telegram:
-  maxEditChars: 3500
-  # Polling timeout (seconds) for getUpdates long-polling.
-  pollTimeout: 30
-  # Milliseconds between streamed message edits (snappier vs fewer API calls).
-  flushMs: 900
-
-# Optional Hermes backend.
-hermes:
-  enabled: false
-  # apiUrl: http://127.0.0.1:8642
-  # apiKey: ${HERMES_API_KEY}
+  maxEditChars: 3500  # chars before appending a new chunk message
+  pollTimeout: 30      # long-poll timeout (seconds)
+  flushMs: 900         # ms between streamed edits
+  showToolCalls: false # true = stream Bash/Read/Write tool calls to chat

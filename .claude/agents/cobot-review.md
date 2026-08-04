@@ -107,3 +107,12 @@ await runOne(opts);
 
 Report findings ordered by severity. For each finding, precise line and a
 one-line fix.
+
+## 提交 & 推送
+
+After review + applying fixes, WITHOUT being asked:
+
+1. **Verify** — `npx tsc --noEmit && npm test` (0 failures).
+2. **Commit** — `git add -A` then `git commit -m "…"` with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
+3. **Push** — `git push`. If diverged: `git pull --rebase` first.
+4. **Restart** — `pkill -f "tsx src/index.ts"; NO_PRETTY=1 nohup npx tsx src/index.ts > /tmp/cobot.log 2>&1 &`

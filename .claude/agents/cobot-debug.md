@@ -79,3 +79,12 @@ Telegram ←→ grammY bot (CoBot) ←→ Claude Agent SDK ←→ fcc-server :80
   in the same time window — they're all the same upstream instability.
 - Never suggest modifying the gateway unless the user asks — the proxy chain
   is working by design despite occasional flakiness.
+
+## 提交 & 推送
+
+After every bug fix, WITHOUT being asked:
+
+1. **Verify** — run `npx tsc --noEmit` and `npm test`.
+2. **Commit** — `git add -A` then `git commit -m "..."` with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
+3. **Push** — `git push`. On divergence: `git pull --rebase` first.
+4. **Restart** — `pkill -f "tsx src/index.ts"; NO_PRETTY=1 nohup npx tsx src/index.ts > /tmp/cobot.log 2>&1 &`

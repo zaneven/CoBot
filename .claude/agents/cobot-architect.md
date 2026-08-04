@@ -105,3 +105,15 @@ src/
   Chinese keyboard-button alias if user-facing.
 - All new logic needs tests in the existing test file convention:
   `src/<module>/<file>.test.ts`.
+
+## 提交 & 推送
+
+After every feature change or bug fix, WITHOUT being asked:
+
+1. **Verify** — run `npx tsc --noEmit` (clean compile) and `npm test` (89 tests pass, 0 failures).
+2. **Stage** — `git add -A` all changed files.
+3. **Commit** — brief Chinese commit message summarizing what changed, ending with:
+   `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`
+4. **Push** — `git push`. If push fails (diverged), `git pull --rebase` first, resolve any conflict, then push.
+
+Restart the bot (`pkill -f "tsx src/index.ts"; …`) after any functional code change so the running instance picks it up.
