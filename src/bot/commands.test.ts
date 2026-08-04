@@ -14,18 +14,21 @@ const mkProjects = (n: number) =>
 
 test("page 0 of 25: 5 grid rows of 2 + nav row (indicator + next, no prev)", () => {
   const r = rows(renderProjectsKeyboard(mkProjects(25), null, 0));
-  assert.equal(r.length, 6); // 5 grid rows + 1 nav row
+  assert.equal(r.length, 7); // 5 grid + 1 nav + 1 新建
   for (let i = 0; i < 5; i++) assert.equal(r[i]!.length, 2, `grid row ${i} has 2 buttons`);
   const nav = r[5]!;
   assert.equal(nav.length, 2);
   assert.ok(nav.some((b) => b.callback_data === "projpg:1"), "has next button");
   assert.ok(nav.some((b) => b.text === "1/3"), "has page indicator 1/3");
   assert.ok(!nav.some((b) => (b.callback_data ?? "").startsWith("projpg:0")), "no prev on page 0");
+  // "新建项目" row at the bottom.
+  assert.equal(r[6]![0]!.text, "➕ 新建项目");
 });
 
 test("middle page: prev + indicator + next", () => {
   const r = rows(renderProjectsKeyboard(mkProjects(25), null, 1));
-  const nav = r[r.length - 1]!;
+  assert.equal(r.length, 7); // 5 grid + 1 nav + 1 新建
+  const nav = r[5]!;
   assert.equal(nav.length, 3);
   assert.ok(nav.some((b) => b.callback_data === "projpg:0"), "prev");
   assert.ok(nav.some((b) => b.callback_data === "projpg:2"), "next");
@@ -34,9 +37,9 @@ test("middle page: prev + indicator + next", () => {
 
 test("last page: prev + indicator, no next; partial grid row", () => {
   const r = rows(renderProjectsKeyboard(mkProjects(25), null, 2));
-  assert.equal(r.length, 4); // 3 grid rows (5 items: 2+2+1) + nav
+  assert.equal(r.length, 5); // 3 grid + 1 nav + 1 新建
   assert.equal(r[2]!.length, 1, "last grid row has the leftover single project");
-  const nav = r[r.length - 1]!;
+  const nav = r[3]!;
   assert.equal(nav.length, 2);
   assert.ok(nav.some((b) => b.callback_data === "projpg:1"), "prev");
   assert.ok(!nav.some((b) => (b.callback_data ?? "").startsWith("projpg:3")), "no next on last page");
@@ -45,7 +48,7 @@ test("last page: prev + indicator, no next; partial grid row", () => {
 
 test("<=10 projects: no pagination controls at all", () => {
   const r = rows(renderProjectsKeyboard(mkProjects(5), null, 0));
-  assert.equal(r.length, 3); // 2 + 2 + 1
+  assert.equal(r.length, 4); // 3 item rows (2+2+1) + 1 新建
   assert.ok(
     !r.some((row) => row.some((b) => (b.callback_data ?? "").startsWith("projp"))),
     "no projpg/projpi buttons when single page",
@@ -68,7 +71,8 @@ test("grid buttons select via proj:<name>", () => {
 test("page is clamped past the end", () => {
   // 25 projects = 3 pages (0..2); page 99 should clamp to 2 (last).
   const r = rows(renderProjectsKeyboard(mkProjects(25), null, 99));
-  const nav = r[r.length - 1]!;
+  // Nav is second-to-last; last row is "新建项目".
+  const nav = r[r.length - 2]!;
   assert.ok(nav.some((b) => b.text === "3/3"));
 });
 

@@ -1,4 +1,6 @@
 import { InlineKeyboard, Keyboard, type Context } from "grammy";
+import { mkdirSync, existsSync } from "node:fs";
+import { execSync } from "node:child_process";
 import type { Config } from "../config.js";
 import { isPathAllowed, listDevProjects, type DevProject } from "../config.js";
 import type { Store } from "../store/db.js";
@@ -129,7 +131,85 @@ export function renderProjectsKeyboard(projects: DevProject[], current: string |
     if (safePage < totalPages - 1) nav.push(InlineKeyboard.text("➡️", `${PROJPG_PREFIX}${safePage + 1}`));
     rows.push(nav);
   }
+
+  // "New project" row — always at the bottom.
+  rows.push([InlineKeyboard.text("➕ 新建项目", "newproj")]);
+
   return new InlineKeyboard(rows);
+}
+
+// ── pending‑action state: per‑chat "we asked for a project name" ──────────
+
+const pendingNewProject = new Map<number, true>();
+
+export function isPendingNewProject(chatId: number): boolean {
+  return pendingNewProject.has(chatId);
+}
+
+export function setPendingNewProject(chatId: number): void {
+  pendingNewProject.set(chatId, true);
+}
+
+function consumePendingNewProject(chatId: number): boolean {
+  return pendingNewProject.delete(chatId);
+}
+
+/** Callback: user tapped "➕ 新建项目". Ask them for the project name. */
+export async function handleNewProjectClick(ctx: Context): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  setPendingNewProject(chatId);
+  await ctx.answerCallbackQuery({});
+  await ctx.reply("📝 请输入项目名称（纯英文 + 连字符），例如 `my-new-bot`：");
+}
+
+/**
+ * Called from handleNewProjectText when the user has confirmed a name for the new project.
+ * Creates `<devRoot>/<name>`, runs `git init`, and binds the chat to it.
+ */
+async function handleNewProjectCreate(ctx: Context, config: Config, store: Store, name: string): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const trimmed = name.replace(/\s+/g, "-").replace(/[^a-zA-Z0-9_-]/g, "").replace(/^-+|-+$/g, "");
+  if (!trimmed || trimmed.length < 2) {
+    await ctx.reply("❌ 无效的项目名称。请输入至少2个字符的英文名称。");
+    consumePendingNewProject(chatId);
+    return;
+  }
+
+  // Use the first dev-root as the parent for new projects.
+  const root = config.devRoots[0];
+  if (!root) {
+    await ctx.reply("❌ No dev roots configured. Set `devRoots` in config.yaml.");
+    consumePendingNewProject(chatId);
+    return;
+  }
+
+  const projectPath = `${root}/${trimmed}`;
+  if (existsSync(projectPath)) {
+    await ctx.reply(`❌ 目录已存在：${projectPath}`);
+    consumePendingNewProject(chatId);
+    return;
+  }
+
+  try {
+    mkdirSync(projectPath, { recursive: true });
+    execSync("git init", { cwd: projectPath, stdio: "ignore" });
+  } catch (err) {
+    logger.error({ err: String(err), path: projectPath }, "new project create failed");
+    await ctx.reply(`❌ 创建项目失败：${err instanceof Error ? err.message : String(err)}`);
+    consumePendingNewProject(chatId);
+    return;
+  }
+
+  // The path is already accepted via its devRoot. Bind to it.
+  store.upsertBinding(chatId, projectPath, null);
+
+  await ctx.reply(`✅ 项目 ${trimmed} 创建完成（已 git init）\n${projectPath}`, {
+    reply_markup: buildActionKeyboard(),
+  });
+  consumePendingNewProject(chatId);
 }
 
 /** /projects - list switchable projects under dev roots as inline buttons,
@@ -338,6 +418,12 @@ export async function handleText(ctx: Context, config: Config, store: Store, reg
   const text = ctx.message?.text;
   if (!chatId || !text) return;
 
+  // Pending "new project" name → intercept before Claude Code.
+  if (pendingNewProject.has(chatId)) {
+    await handleNewProjectCreate(ctx, config, store, text);
+    return;
+  }
+
   const binding = store.getBinding(chatId);
   if (!binding) {
     await ctx.reply("No project selected. Use /projects to pick one.");
@@ -370,7 +456,7 @@ export async function handleSessions(ctx: Context, store: Store): Promise<void> 
   const kb = new InlineKeyboard();
   for (const s of sessions) {
     const mark = s.sessionId === current ? "● " : "";
-    const label = `${mark}${truncate(s.summary, 28)} · ${relTime(s.lastModified)}`;
+    const label = `${mark}${truncate(s.summary, 48)} · ${relTime(s.lastModified)} · ${s.sessionId.slice(0, 6)}`;
     kb.text(label, `sw:${s.sessionId}`).row();
   }
   await ctx.reply(`${wantAll ? "All sessions" : `Sessions in ${b!.projectPath}`} (tap to switch):`, {
@@ -558,34 +644,52 @@ const SKILLS: readonly SkillDef[] = [
 // Group skills by category: each block has a header row + one row per skill
 
 const SKILLS_PER_PAGE = 12;
-const SKILL_PAGE_CB = "skp:";
+const SK_PAGE_CB = "skp:";
 
-/** /skills — paginated inline keyboard where each button opens the skill in an
- *  inline query (switchInlineCurrent). The bot's inline_query handler echoes
- *  the text; the user picks a skill, types their request and sends. */
-export async function handleSkills(ctx: Context, page = 0): Promise<void> {
+/** Build the paginated inline keyboard for /skills. Each skill button opens an
+ *  inline query (switchInlineCurrent) with the skill trigger pre‑filled.
+ *  Pagination row uses prev / indicator / next like /projects. */
+export function renderSkillsKeyboard(page: number): InlineKeyboard {
   const totalPages = Math.max(1, Math.ceil(SKILLS.length / SKILLS_PER_PAGE));
   const safePage = Math.min(Math.max(0, page), totalPages - 1);
-  const pageSkills = SKILLS.slice(safePage * SKILLS_PER_PAGE, (safePage + 1) * SKILLS_PER_PAGE);
+  const slice = SKILLS.slice(safePage * SKILLS_PER_PAGE, (safePage + 1) * SKILLS_PER_PAGE);
 
   const kb = new InlineKeyboard();
-  for (const s of pageSkills) {
+  for (const s of slice) {
     kb.switchInlineCurrent(`${s.name} — ${s.desc}`, s.name).row();
   }
 
-  // Pagination row
+  // Navigation row (same layout as /projects)
   if (totalPages > 1) {
-    const row = [];
-    for (let p = 0; p < totalPages; p++) {
-      row.push(InlineKeyboard.text(`${p + 1}`, `${SKILL_PAGE_CB}${p}`));
-    }
-    kb.row(...row);
+    type Btn = ReturnType<typeof InlineKeyboard.text>;
+    const nav: Btn[] = [];
+    if (safePage > 0) nav.push(InlineKeyboard.text("⬅️", `${SK_PAGE_CB}${safePage - 1}`));
+    nav.push(InlineKeyboard.text(`${safePage + 1}/${totalPages}`, `${SK_PAGE_CB}${safePage}`));
+    if (safePage < totalPages - 1) nav.push(InlineKeyboard.text("➡️", `${SK_PAGE_CB}${safePage + 1}`));
+    kb.row(...nav);
   }
 
-  await ctx.reply(
-    `Skills (page ${safePage + 1}/${totalPages}): tap a skill to fill the input bar, then type your query.`,
-    { reply_markup: kb },
-  );
+  return kb;
+}
+
+/** /skills — paginated inline keyboard. Tap a skill to open inline query mode. */
+export async function handleSkills(ctx: Context): Promise<void> {
+  await ctx.reply("Skills (tap to fill the input bar, then type your query):", {
+    reply_markup: renderSkillsKeyboard(0),
+  });
+}
+
+/** Callback handler for /skills page navigation (prev/next). */
+export async function handleSkillsPage(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data ?? "";
+  if (!data.startsWith(SK_PAGE_CB)) return;
+  const page = parseInt(data.slice(SK_PAGE_CB.length), 10) || 0;
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: renderSkillsKeyboard(page) });
+  } catch (err) {
+    logger.debug({ err: String(err) }, "skills page nav edit failed");
+  }
+  await ctx.answerCallbackQuery({});
 }
 
 /** /auto [off] — toggle persistent auto‑session mode. Stays active until /auto off or restart. */

@@ -6,6 +6,7 @@ import type { PromptInput } from "../claude/types.js";
 import { runClaude } from "../claude/driver.js";
 import { TelegramStreamer } from "./streaming.js";
 import { SilenceIndicator } from "./indicator.js";
+import { sendRichText } from "../util/send.js";
 import { logger } from "../util/logger.js";
 
 export interface RunOutcome {
@@ -96,7 +97,7 @@ async function runTurn(opts: {
           if (ev.isError) {
             logger.error({ text: ev.text, costUsd: ev.costUsd, durationMs: ev.durationMs }, "claude task finished with error");
             const detail = ev.text ? `\n\`\`\`\n${ev.text.slice(0, 1000)}\n\`\`\`` : "";
-            await api.sendMessage(chatId, `⚠️ Finished with error.${detail}`);
+            await sendRichText(api, chatId, `⚠️ Finished with error.${detail}`);
           } else if (ev.aborted) {
             const reason =
               abortedReason === "timeout" ? ` (timed out after ${Math.round(config.claude.taskTimeoutMs / 60000)}m)` : "";
@@ -113,7 +114,7 @@ async function runTurn(opts: {
         case "error":
           hadError = true;
           await streamer.finalize();
-          await api.sendMessage(chatId, `❌ ${ev.message}`);
+          await sendRichText(api, chatId, `❌ ${ev.message}`);
           break;
       }
     }
@@ -121,7 +122,7 @@ async function runTurn(opts: {
     hadError = true;
     logger.error({ err: String(err) }, "runTurn error");
     await streamer.finalize();
-    await api.sendMessage(chatId, `❌ Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+    await sendRichText(api, chatId, `❌ Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     clearInterval(typingTimer);
     await indicator.stop();

@@ -27,6 +27,8 @@ import {
   handleAuto,
   handleContext,
   handleSkills,
+  handleSkillsPage,
+  handleNewProjectClick,
 } from "./commands.js";
 import { handlePhoto, handleDocument } from "./media.js";
 
@@ -84,13 +86,11 @@ export function createBot(
   bot.command("context", (ctx) => handleContext(ctx, registry));
   bot.command("skills", (ctx) => handleSkills(ctx));
 
-  // /skills pagination: callback buttons to switch pages (skp:<page>).
-  bot.callbackQuery(/^skp:/, async (ctx) => {
-    const data = ctx.callbackQuery?.data ?? "";
-    const page = parseInt(data.slice(4), 10) || 0;
-    await ctx.answerCallbackQuery();
-    await handleSkills(ctx, page);
-  });
+  // /skills pagination: prev/next buttons (skp:<page>).
+  bot.callbackQuery(/^skp:/, (ctx) => handleSkillsPage(ctx));
+
+  // /projects "新建项目" button.
+  bot.callbackQuery("newproj", (ctx) => handleNewProjectClick(ctx));
 
   // Inline query handler — required for switchInlineCurrent buttons in /skills.
   bot.on("inline_query", async (ctx) => {
