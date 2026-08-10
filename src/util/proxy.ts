@@ -52,7 +52,11 @@ export function detectProxyUrl(): string | undefined {
 export function createProxyAgent(): Agent | undefined {
   const url = detectProxyUrl();
   if (!url) {
-    logger.info("no HTTP proxy detected; using direct connections for Telegram");
+    logger.warn(
+      "no HTTP proxy detected (checked COBOT_PROXY/HTTPS_PROXY/scutil); " +
+        "Telegram is only reachable via a proxy on this network — bot may hang silently on outbound calls. " +
+        "Set COBOT_PROXY or enable the system proxy.",
+    );
     return undefined;
   }
   const agent: Agent = url.startsWith("socks")

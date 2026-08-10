@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PromptInput } from "./types.js";
-import { buildSdkPrompt } from "./driver.js";
+import { buildSdkPrompt, parseContextFromModelId, computeContextUsagePct, mapContentBlockDelta } from "./driver.js";
+import type { ModelUsage } from "@anthropic-ai/claude-agent-sdk";
 
 type Block = { type: string; text?: string; source?: { type: string; media_type: string; data: string } };
 
@@ -63,4 +64,148 @@ test("text file -> inlined fenced text block, truncated past limit", async () =>
   assert.ok(blocks[1]!.text!.startsWith("📎 log.txt (text/plain)"));
   assert.ok(blocks[1]!.text!.includes("[truncated]"));
   assert.ok(blocks[1]!.text!.length < 220_000);
+});
+
+test("parseContextFromModelId: [1M] -> 1_048_576", () => {
+  assert.equal(parseContextFromModelId("deepseek-ai/deepseek-v4-pro[1M]"), 1_048_576);
+});
+
+test("parseContextFromModelId: [500K] -> 512_000", () => {
+  assert.equal(parseContextFromModelId("some-model[500K]"), 512_000);
+});
+
+test("parseContextFromModelId: [32K] -> 32_768", () => {
+  assert.equal(parseContextFromModelId("claude-haiku-4-5[32K]"), 32_768);
+});
+
+test("parseContextFromModelId: [200K] -> 204_800", () => {
+  assert.equal(parseContextFromModelId("claude-sonnet-4-5[200K]"), 204_800);
+});
+
+test("parseContextFromModelId: no bracket -> 0", () => {
+  assert.equal(parseContextFromModelId("anthropic/claude-opus-5"), 0);
+});
+
+test("parseContextFromModelId: empty string -> 0", () => {
+  assert.equal(parseContextFromModelId(""), 0);
+});
+
+// ─── computeContextUsagePct ────────────────────────────────────────────
+
+function mu(overrides: Partial<ModelUsage> = {}): ModelUsage {
+  return {
+    inputTokens: 1000,
+    outputTokens: 500,
+    cacheReadInputTokens: 0,
+    cacheCreationInputTokens: 0,
+    webSearchRequests: 0,
+    costUSD: 0,
+    contextWindow: 200_000,
+    maxOutputTokens: 4096,
+    ...overrides,
+  };
+}
+
+test("computeContextUsagePct: undefined -> undefined", () => {
+  assert.equal(computeContextUsagePct(undefined), undefined);
+});
+
+test("computeContextUsagePct: empty record -> undefined", () => {
+  assert.equal(computeContextUsagePct({}), undefined);
+});
+
+test("computeContextUsagePct: uses SDK-reported contextWindow when valid", () => {
+  assert.equal(
+    computeContextUsagePct({ "anthropic/claude-sonnet-5": mu({ contextWindow: 200_000, inputTokens: 5000 }) }),
+    3, // 5000/200000*100 = 2.5 → 3
+  );
+});
+
+test("computeContextUsagePct: zero contextWindow -> undefined", () => {
+  assert.equal(
+    computeContextUsagePct({ model: mu({ contextWindow: 0 }) }),
+    undefined,
+  );
+});
+
+test("computeContextUsagePct: fallback from record key suffix (third-party model)", () => {
+  const record: Record<string, ModelUsage> = {
+    "deepseek-ai/deepseek-v4-pro[1M]": mu({ contextWindow: 2000, inputTokens: 100_000 }),
+  };
+  // 100_000 / 1_048_576 * 100 ≈ 10
+  assert.equal(computeContextUsagePct(record), 10);
+});
+
+test("computeContextUsagePct: fallback from canonicalModel suffix", () => {
+  const record: Record<string, ModelUsage> = {
+    "custom-model-alias": mu({ contextWindow: 2000, inputTokens: 100_000, canonicalModel: "some-model[500K]" }),
+  };
+  // 100_000 / 512_000 * 100 ≈ 20
+  assert.equal(computeContextUsagePct(record), 20);
+});
+
+test("computeContextUsagePct: tiny window triggers fallback, no suffix → still computes raw", () => {
+  // Fallback triggers (contextWindow < 2000) but no [NK] suffix anywhere —
+  // the raw contextWindow is used as-is. Not great, but better than hiding
+  // the problem with undefined.
+  const record: Record<string, ModelUsage> = {
+    "some-unknown-model": mu({ contextWindow: 1000, inputTokens: 100_000 }),
+  };
+  // 100_000 / 1000 * 100 = 10000
+  assert.equal(computeContextUsagePct(record), 10000);
+});
+
+test("computeContextUsagePct: multi-model — takes max SDK window, skips fallback", () => {
+  // When at least one model has a reasonable contextWindow, fallback is never triggered.
+  const record: Record<string, ModelUsage> = {
+    "deepseek-ai/deepseek-v4-pro[1M]": mu({ contextWindow: 2000, inputTokens: 50_000 }),
+    "anthropic/claude-sonnet-5": mu({ contextWindow: 200_000, inputTokens: 10_000 }),
+  };
+  // totalTokens = 60_000, maxWindow = 200_000 → 30%
+  assert.equal(computeContextUsagePct(record), 30);
+});
+
+test("computeContextUsagePct: all models tiny window, sums tokens, derives from suffix", () => {
+  const record: Record<string, ModelUsage> = {
+    "deepseek-ai/deepseek-v4-pro[1M]": mu({ contextWindow: 2000, inputTokens: 50_000 }),
+    "gpt-5[128K]": mu({ contextWindow: 1000, inputTokens: 30_000 }),
+  };
+  // 80_000 / 1_048_576 ≈ 8%
+  assert.equal(computeContextUsagePct(record), 8);
+});
+
+// ─── mapContentBlockDelta: thinking / text / ignored ─────────────────────
+
+test("mapContentBlockDelta: thinking_delta → 'thinking' event", () => {
+  const ev = mapContentBlockDelta({ type: "thinking_delta", thinking: "let me think" });
+  assert.deepEqual(ev, { kind: "thinking", delta: "let me think" });
+});
+
+test("mapContentBlockDelta: text_delta → 'text' event", () => {
+  const ev = mapContentBlockDelta({ type: "text_delta", text: "answer" });
+  assert.deepEqual(ev, { kind: "text", delta: "answer" });
+});
+
+test("mapContentBlockDelta: empty thinking/text → null (no spurious event)", () => {
+  assert.equal(mapContentBlockDelta({ type: "thinking_delta" }), null);
+  assert.equal(mapContentBlockDelta({ type: "text_delta" }), null);
+});
+
+test("mapContentBlockDelta: signature_delta is ignored", () => {
+  assert.equal(mapContentBlockDelta({ type: "signature_delta", thinking: "sig" }), null);
+  assert.equal(mapContentBlockDelta({ type: "input_json_delta" } as any), null);
+});
+
+test("mapContentBlockDelta: sequences thinking then text across multiple deltas", () => {
+  const deltas = [
+    { type: "thinking_delta", thinking: "hmm, " },
+    { type: "thinking_delta", thinking: "let me think" },
+    { type: "text_delta", text: "answer" },
+  ];
+  const events = deltas.map((d) => mapContentBlockDelta(d)).filter(Boolean);
+  assert.deepEqual(events, [
+    { kind: "thinking", delta: "hmm, " },
+    { kind: "thinking", delta: "let me think" },
+    { kind: "text", delta: "answer" },
+  ]);
 });

@@ -59,6 +59,7 @@ async function runTurn(opts: {
       allowedTools: config.claude.allowedTools,
       allowDangerouslySkipPermissions:
         config.claude.permissionMode === "bypassPermissions" && config.claude.allowDangerousSkip,
+      maxTurns: config.claude.maxTurns,
       signal: abortSignal,
       timeoutMs: config.claude.taskTimeoutMs,
     })) {
@@ -72,6 +73,12 @@ async function runTurn(opts: {
         case "text":
           indicator.activity();
           await streamer.text(ev.delta);
+          break;
+        case "thinking":
+          // Reasoning in progress - show a progress marker so a long think
+          // isn't silent. Don't append to the streamer (would pollute the
+          // answer); the indicator carries the signal and self-clears on text.
+          indicator.thinking();
           break;
         case "tool":
           indicator.activity();
@@ -95,6 +102,7 @@ async function runTurn(opts: {
             if (ev.abortedReason) abortedReason = ev.abortedReason;
           }
           if (ev.isError) {
+            hadError = true;
             logger.error({ text: ev.text, costUsd: ev.costUsd, durationMs: ev.durationMs }, "claude task finished with error");
             const detail = ev.text ? `\n\`\`\`\n${ev.text.slice(0, 1000)}\n\`\`\`` : "";
             await sendRichText(api, chatId, `⚠️ Finished with error.${detail}`);

@@ -5,6 +5,7 @@
 export type DriverEvent =
   | { kind: "init"; sessionId: string; cwd: string; model: string }
   | { kind: "text"; delta: string }
+  | { kind: "thinking"; delta: string }
   | { kind: "tool"; name: string; summary: string }
   | { kind: "toolResult"; name: string; content: string; isError: boolean }
   | { kind: "status"; status: string }

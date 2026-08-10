@@ -63,6 +63,7 @@ src/
 ├── util/
 │   ├── proxy.ts         — 代理环境检测与 Agent 实例化
 │   ├── http.ts          — 带代理的 Buffer 下载工具
+│   ├── send.ts          — Telegram 发送封装（带重试/代理的 sendMessage 等）
 │   ├── tgfmt.ts         — Telegram HTML 转义与 Markdown 转换引擎
 │   └── logger.ts        — Pino 日志封装
 ├── config.ts            — YAML 与环境变量配置加载器
@@ -90,7 +91,10 @@ src/
 - `registry.start()` 必须在 `await runTurn()` **之前同步调用**，确保无并发隙缝。任务完成后由 `drainQueued` 触发下一任务。
 
 ### 4. 流式 Markdown 渲染防护
-- `TelegramStreamer` 必须维护 32000 字符分包与 900ms 节流限制。
+- `TelegramStreamer` 有两级长度控制，注意区分：
+  - **单条消息追加阈值** `maxEditChars`（默认 `3500`，由 `config.telegram.maxEditChars` 配置）：buffer 累积超过该值即 flush 成新消息并重置编辑目标。
+  - **Telegram 硬上限分片** `TG_HARD_LIMIT = 32000`（`streaming.ts` 内常量）：单条消息超过 32768 字符上限时按 32000 分片发送。
+- 节流限制：默认 `flushMs = 900ms`（由 `config.telegram.flushMs` 配置）串行节流，所有发送经 Promise 链串行化避免并发 edit 限频。
 - 采用 **Rich Message 优先 + HTML 降级** 策略。中间态文本发送给 Telegram 解析前，必须通过 `sanitizeStreamMarkdown` 修复未闭合的代码块与行内标点。
 - 详细渲染机制请参考文档：[docs/markdown_rendering.md](file:///docs/markdown_rendering.md)。
 

@@ -17,3 +17,7 @@ telegram:
   pollTimeout: 30      # long-poll timeout (seconds)
   flushMs: 900         # ms between streamed edits
   showToolCalls: false # true = stream Bash/Read/Write tool calls to chat
+
+# Defaults applied to every Claude run unless overridden by a /run flag.
+defaults:
+  maxTurns: 0  # max agentic turns per task (0 = unlimited)

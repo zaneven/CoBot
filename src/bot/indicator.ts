@@ -20,6 +20,11 @@ export class SilenceIndicator {
   private lastActivity: number;
   private timer: ReturnType<typeof setInterval> | undefined;
   private chain: Promise<void> = Promise.resolve();
+  // Thinking-marker state: shown while a reasoning model thinks, cleared on
+  // real activity. Throttled so a long think doesn't spam Telegram edits.
+  private thinkingStart: number | undefined;
+  private lastThinkingEdit = 0;
+  private thinkingPending = false;
 
   constructor(
     private api: Api,
@@ -38,18 +43,45 @@ export class SilenceIndicator {
   /** Any progress (text / tool / toolResult / status). Clears a shown indicator. */
   activity(): void {
     this.lastActivity = Date.now();
+    this.thinkingStart = undefined;
+    this.lastThinkingEdit = 0;
+    this.thinkingPending = false;
     if (this.msgId !== undefined) this.run(() => this.clear());
   }
 
   /** Compaction is a known long op - show it explicitly instead of the heartbeat. */
   compacting(): void {
     this.lastActivity = Date.now();
+    this.thinkingStart = undefined;
     this.run(() => this.set("🧹 Compacting context…"));
+  }
+
+  /**
+   * Show a "💭 Thinking…" marker while a reasoning model thinks. Subsequent
+   * calls throttle to one edit every ~3s carrying an elapsed-seconds counter,
+   * so a long think shows tangible progress instead of minutes of silence.
+   * Cleared by the next real {@link activity}.
+   */
+  thinking(): void {
+    if (this.thinkingStart === undefined) this.thinkingStart = Date.now();
+    this.lastActivity = Date.now();
+    const now = Date.now();
+    if (this.msgId !== undefined && now - this.lastThinkingEdit < 3000) return;
+    // Don't stack sends before the first create resolves (deltas arrive fast).
+    if (this.msgId === undefined && this.thinkingPending) return;
+    this.lastThinkingEdit = now;
+    if (this.msgId === undefined) this.thinkingPending = true;
+    const elapsed = Math.round((now - this.thinkingStart) / 1000);
+    this.run(async () => {
+      this.thinkingPending = false;
+      await this.set(`💭 Thinking… ${elapsed}s`);
+    });
   }
 
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    this.thinkingStart = undefined;
     this.run(() => this.clear());
     await this.chain;
   }

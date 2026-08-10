@@ -22,6 +22,9 @@ export interface Config {
     allowDangerousSkip: boolean;
     /** Hard per-task wall-clock timeout in ms (prevents a hung task from blocking the chat). */
     taskTimeoutMs: number;
+    /** Cap on agentic turns per task. Bounds a runaway tool loop so it can't
+     *  run all the way to the wall-clock watchdog. Undefined = SDK default. */
+    maxTurns?: number;
   };
   dbPath: string;
   projects: string[];
@@ -62,6 +65,18 @@ function envList(name: string): string[] | undefined {
   const v = process.env[name];
   if (!v) return undefined;
   return v.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/** Coerce a maxTurns value to a positive int, else undefined (SDK default).
+ *  Capped at 200 to bound runaway tool loops even if misconfigured. */
+export const MAX_TURNS = 200;
+export function clampTurns(v: number | undefined): number | undefined {
+  if (!v || !Number.isFinite(v) || v <= 0) return undefined;
+  const capped = Math.min(Math.floor(v), MAX_TURNS);
+  if (capped < v) {
+    logger.warn({ requested: v, capped: MAX_TURNS }, "maxTurns exceeds cap; clamped");
+  }
+  return capped;
 }
 
 export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): Config {
@@ -108,6 +123,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
       allowedTools: envList("CLAUDE_ALLOWED_TOOLS"),
       allowDangerousSkip,
       taskTimeoutMs: Number(process.env.CLAUDE_TASK_TIMEOUT_MS ?? 10 * 60 * 1000),
+      maxTurns: clampTurns(process.env.CLAUDE_MAX_TURNS ? Number(process.env.CLAUDE_MAX_TURNS) : yaml.defaults?.maxTurns),
     },
     dbPath: process.env.COBOT_DB_PATH ?? resolve(process.cwd(), "data/cobot.db"),
     projects: (yaml.projects ?? []).map((p) => resolve(p)),

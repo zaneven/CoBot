@@ -87,11 +87,12 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
         }
         case "stream_event": {
           // Partial assistant content (token deltas). Emitted when the SDK streams.
-          const ev = (msg as { event: { type: string; delta?: { type: string; text?: string } } }).event;
-          if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta" && ev.delta.text) {
-            sawStreamEvent = true;
-            yield { kind: "text", delta: ev.delta.text };
-          }
+          const ev = (msg as { event: { type: string; delta?: { type: string; text?: string; thinking?: string } } }).event;
+          if (ev.type !== "content_block_delta" || !ev.delta) break;
+          const mapped = mapContentBlockDelta(ev.delta);
+          if (!mapped) break;
+          if (mapped.kind === "text") sawStreamEvent = true;
+          yield mapped;
           break;
         }
         case "assistant": {
@@ -188,6 +189,28 @@ export function buildSdkPrompt(input: PromptInput): string | AsyncIterable<SDKUs
   return toUserMessages(input);
 }
 
+/**
+ * Map a single SDK `content_block_delta` into a {@link DriverEvent}, or return
+ * null when the delta carries no renderable text (e.g. `signature_delta`).
+ *
+ * Kept as a standalone pure function so the streaming branch is unit-testable
+ * without mocking the Claude Agent SDK.
+ */
+export function mapContentBlockDelta(
+  delta: { type: string; text?: string; thinking?: string },
+): DriverEvent | null {
+  if (delta.type === "text_delta" && delta.text) {
+    return { kind: "text", delta: delta.text };
+  }
+  if (delta.type === "thinking_delta" && delta.thinking) {
+    // Reasoning models stream their chain-of-thought as thinking deltas.
+    // Surfacing these breaks the long silence where a 20-minute think is
+    // indistinguishable from a hung task. (signature_delta has no text.)
+    return { kind: "thinking", delta: delta.thinking };
+  }
+  return null;
+}
+
 async function* toUserMessages(input: PromptInput): AsyncGenerator<SDKUserMessage> {
   const blocks: ContentBlockParam[] = [];
   if (input.text) blocks.push({ type: "text", text: input.text });
@@ -238,19 +261,50 @@ function truncate(s: string, n: number): string {
 }
 
 /**
- * Compute percentage of context window used from per-model usage records.
- * Uses the model with the largest {@link ModelUsage.contextWindow} as the
- * primary runtime, summing all models' {@link ModelUsage.inputTokens} for the
- * total numerator — this handles both single-model and fallback calls.
+ * Parse a model identifier for a `[NNK]` or `[NNM]` suffix and return the
+ * implied context window size (tokens). Returns 0 when no suffix is found.
  */
-function computeContextUsagePct(modelUsage: Record<string, ModelUsage> | undefined): number | undefined {
+export function parseContextFromModelId(id: string): number {
+  const m = id.match(/\[(\d+(?:\.\d+)?)([KM])\]/i);
+  if (!m) return 0;
+  const num = parseFloat(m[1]!);
+  const unit = m[2]!.toUpperCase();
+  return Math.round(num * (unit === "M" ? 1_048_576 : unit === "K" ? 1_024 : 1));
+}
+
+/**
+ * Compute percentage of context window used from per-model usage records.
+ *
+ * The SDK-provided {@link ModelUsage.contextWindow} is populated from Claude
+ * Code's internal model registry which only covers first-party models. Third-
+ * party models (e.g. `deepseek-ai/deepseek-v4-pro[1M]`) get a fallback value
+ * as small as 2000 tokens. When that happens the raw percentage explodes (e.g.
+ * 1373%) even though the conversation hasn't actually exceeded the real window.
+ *
+ * To compensate, when the raw context-window looks unrealistically small (<2k
+ * tokens while actual input exceeds it) we derive the window from the model
+ * identifier's `[?M]`/`[?K]` suffix, which the gateway preserves.
+ */
+export function computeContextUsagePct(modelUsage: Record<string, ModelUsage> | undefined): number | undefined {
   if (!modelUsage) return undefined;
-  const entries = Object.values(modelUsage);
+  const entries = Object.entries(modelUsage);
   if (entries.length === 0) return undefined;
-  const primaryWindow = Math.max(...entries.map((e) => e.contextWindow));
-  if (primaryWindow <= 0) return undefined;
-  const totalInputTokens = entries.reduce((sum, e) => sum + e.inputTokens, 0);
-  return Math.round((totalInputTokens / primaryWindow) * 100);
+
+  let contextWindow = Math.max(...entries.map(([, e]) => e.contextWindow));
+  const totalInputTokens = entries.reduce((sum, [, e]) => sum + e.inputTokens, 0);
+
+  // If the SDK-reported window is tiny but we have substantial input, try
+  // to recover from the model / canonical-model name suffix.
+  if (contextWindow <= 2000 && totalInputTokens > 0) {
+    for (const [key, entry] of entries) {
+      const derived = parseContextFromModelId(entry.canonicalModel ?? "") ||
+        parseContextFromModelId(key);
+      if (derived > 0) { contextWindow = derived; break; }
+    }
+  }
+
+  if (contextWindow <= 0) return undefined;
+  return Math.round((totalInputTokens / contextWindow) * 100);
 }
 
 /** Extract readable text from a tool_result content block (string or text-block array). */

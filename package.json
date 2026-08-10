@@ -11,7 +11,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/util/tgfmt.test.ts src/bot/commands.test.ts src/registry/registry.test.ts src/claude/driver.test.ts src/store/db.test.ts src/bot/streaming.test.ts src/bot/media.test.ts src/bot/runs.test.ts",
+    "test": "node --import tsx --test src/util/tgfmt.test.ts src/bot/commands.test.ts src/registry/registry.test.ts src/claude/driver.test.ts src/store/db.test.ts src/bot/streaming.test.ts src/bot/media.test.ts src/bot/runs.test.ts src/config.test.ts",
     "build": "tsc"
   },
   "dependencies": {
