@@ -33,6 +33,7 @@ import {
   handleApprove,
   handleApproveModeCallback,
   handleBot,
+  handleNextActionCallback,
 } from "./commands.js";
 import { handlePhoto, handleDocument } from "./media.js";
 
@@ -103,6 +104,9 @@ export function createBot(
   // /approve mode toggle (approve:<auto|interactive>) — distinct prefix from
   // the tool-approval `appr:` above so the two never collide.
   bot.callbackQuery(/^approve:/, (ctx) => handleApproveModeCallback(ctx, store));
+
+  // Suggested next-step buttons (next:<id>) rendered under a finished result.
+  bot.callbackQuery(/^next:/, (ctx) => handleNextActionCallback(ctx, { config, store, registry }));
 
   // /projects "新建项目" button.
   bot.callbackQuery("newproj", (ctx) => handleNewProjectClick(ctx));

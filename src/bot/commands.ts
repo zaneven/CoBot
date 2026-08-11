@@ -9,6 +9,7 @@ import type { CronManager } from "../scheduler/cron.js";
 import { listProjectSessions, listAllSessions, findSession } from "../claude/sessions.js";
 import { submitInteractive } from "./runs.js";
 import { runBotCtl, tailBotLog, type BotCtlAction } from "./ctl.js";
+import { consumeSuggestion } from "./nextActions.js";
 import { logger } from "../util/logger.js";
 
 /** Single source of truth for the bot's commands. Drives both the Telegram
@@ -840,6 +841,46 @@ export async function handleApproveModeCallback(ctx: Context, store: Store): Pro
     logger.debug({ err: String(err) }, "approve mode edit failed");
   }
   await ctx.answerCallbackQuery({ text: `已切换为 ${target === "auto" ? "自动" : "手动"}` });
+}
+
+/**
+ * Callback for inline `next:<id>` buttons — fire the suggested follow-up action.
+ *
+ * The id maps to a one-shot suggestion stored per chat (registered when the
+ * result message's keyboard was built). Tapping it sends the action's prompt to
+ * Claude Code as a new interactive message, continuing the bound project/session.
+ * Unknown / expired ids report gracefully instead of firing a stale prompt.
+ */
+export async function handleNextActionCallback(
+  ctx: Context,
+  deps: { config: Config; store: Store; registry: Registry },
+): Promise<void> {
+  const data = ctx.callbackQuery?.data ?? "";
+  if (!data.startsWith("next:")) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  const chatId = ctx.chat?.id;
+  if (!chatId) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  const id = data.slice("next:".length);
+  const action = consumeSuggestion(chatId, id);
+  if (!action) {
+    await ctx.answerCallbackQuery({ text: "该建议已过期，请直接输入指令" });
+    return;
+  }
+  await ctx.answerCallbackQuery({ text: "已发送" });
+  submitInteractive({
+    api: ctx.api,
+    chatId,
+    prompt: { text: action.prompt },
+    displayText: action.label,
+    config: deps.config,
+    registry: deps.registry,
+    store: deps.store,
+  });
 }
 
 // ── Bot lifecycle control (/bot start|stop|restart|status|install) ──────────

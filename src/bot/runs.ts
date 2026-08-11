@@ -9,6 +9,7 @@ import { SilenceIndicator } from "./indicator.js";
 import { sendRichText } from "../util/send.js";
 import { logger } from "../util/logger.js";
 import { approvalManager } from "./approval.js";
+import { generateSuggestions, renderSuggestionKeyboard } from "./nextActions.js";
 
 export interface RunOutcome {
   status: "done" | "aborted" | "error";
@@ -223,6 +224,20 @@ async function runTurn(opts: {
             if (ev.costUsd) parts.push(`$${ev.costUsd.toFixed(4)}`);
             if (ev.durationMs) parts.push(`${(ev.durationMs / 1000).toFixed(1)}s`);
             await api.sendMessage(chatId, parts.join(" · "));
+            // ④ Suggested next actions — quick buttons under the result. Inferred
+            //    from the final answer (files / errors / tests / commands) plus
+            //    universal follow-ups. Wrapped so a generation hiccup can never
+            //    break the final message already delivered above.
+            try {
+              const suggestions = generateSuggestions(answer);
+              if (suggestions.length) {
+                await api.sendMessage(chatId, "💡 建议的下一步操作：", {
+                  reply_markup: renderSuggestionKeyboard(suggestions, chatId),
+                });
+              }
+            } catch (err) {
+              logger.debug({ err: String(err) }, "next-action suggestions failed");
+            }
           }
           break;
         case "error":
