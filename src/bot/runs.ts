@@ -87,9 +87,11 @@ async function runTurn(opts: {
   //   (how long it thought + what tools it called) above THAT ROUND'S OWN text
   //   output, streamed live. Each round shows only its own slice — nothing is
   //   accumulated across rounds, so the per-round views stay short.
-  // ② After the run we send the final round's text as the clean consolidated
-  //   answer — i.e. only the *last* round's output, not the whole transcript,
-  //   so it never duplicates the earlier ① messages.
+  // ② We *used* to also send the final round's text as a separate "clean
+  //   answer" message. But ① already streams that exact text live, so doing so
+  //   just duplicated the content. Now ② is only emitted when its text differs
+  //   from the last ① message (see shouldSendFinalAnswer), keeping the final
+  //   answer visible without showing it twice.
   // ③ Then a done summary (token counts, cost, duration).
   let currentRound: TelegramStreamer | null = null;
   let roundStartMs = 0;
@@ -204,11 +206,12 @@ async function runTurn(opts: {
               abortedReason === "timeout" ? ` (timed out after ${Math.round(config.claude.taskTimeoutMs / 60000)}m)` : "";
             await api.sendMessage(chatId, `⏹ Interrupted${reason}.`);
           } else {
-            // ② Complete, clean final answer (no per-round headers) as its own
-            //    message — only the LAST round's text, so it never duplicates
-            //    the earlier ① per-round messages.
+            // ② Final answer as its own clean message (no per-round header).
+            //    Only send it when it differs from the last ① message — ①
+            //    already streams the final round's text live, so a matching ②
+            //    would just repeat the same content.
             const answer = lastRoundText || ev.text.trim();
-            if (answer) {
+            if (shouldSendFinalAnswer(answer, roundText)) {
               const answerStreamer = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
               await answerStreamer.text(answer);
               await answerStreamer.finalize();
@@ -417,6 +420,21 @@ function fmtToolSummary(counts: Record<string, number>): string {
 function fmtTokens(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
   return String(n);
+}
+
+/**
+ * Decide whether the final answer deserves its own ② message.
+ *
+ * The last ① message already streams the final round's full text live, so
+ * re-sending that same text as ② would show the content twice. We therefore
+ * only emit ② when `answer` is non-empty AND differs from what ① already
+ * showed (the last round's body). Returns false when they match — which is the
+ * common case — so the duplicate is suppressed.
+ */
+export function shouldSendFinalAnswer(answer: string, lastRoundBody: string): boolean {
+  const a = answer.trim();
+  if (!a) return false;
+  return a !== lastRoundBody.trim();
 }
 
 /**

@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../store/db.js";
 import { Registry } from "../registry/registry.js";
-import { submitInteractive } from "./runs.js";
+import { submitInteractive, shouldSendFinalAnswer } from "./runs.js";
 import type { Config } from "../config.js";
 import type { PromptInput } from "../claude/types.js";
 
@@ -102,4 +102,34 @@ test("submitInteractive enqueues twice when one is already running and one is qu
   });
   assert.equal(registry.queueLength(CHAT), 2);
   assert.ok(api.messages[0]!.includes("Queued #2"));
+});
+
+// ── ② final-answer dedupe ──〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
+
+// The last ① message already streams the final round's text live, so when ②
+// would just repeat that same text it must be suppressed (no duplicate send).
+test("shouldSendFinalAnswer: skips when ② equals the last ① body", () => {
+  // Common case: single-round task → last round text == final answer.
+  assert.equal(shouldSendFinalAnswer("Here is the result.", "Here is the result."), false);
+  // Whitespace-only difference must not force a duplicate.
+  assert.equal(shouldSendFinalAnswer("  done  ", "done"), false);
+});
+
+test("shouldSendFinalAnswer: sends when ② genuinely differs", () => {
+  // Multi-part answer synthesized from the whole transcript.
+  assert.equal(
+    shouldSendFinalAnswer("Summary: a + b = c", "a = 1"),
+    true,
+  );
+});
+
+test("shouldSendFinalAnswer: sends when there was no ① (empty round body)", () => {
+  // No round streamed (e.g. immediate done with only ev.text) → ② is the only
+  // place the answer appears, so it must be emitted.
+  assert.equal(shouldSendFinalAnswer("answer text", ""), true);
+});
+
+test("shouldSendFinalAnswer: never sends an empty answer", () => {
+  assert.equal(shouldSendFinalAnswer("", "some body"), false);
+  assert.equal(shouldSendFinalAnswer("   ", ""), false);
 });
