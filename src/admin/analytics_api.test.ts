@@ -8,7 +8,7 @@ import { loadConfig } from "../config.js";
 
 test("Admin API Phase 2: GET /admin/api/analytics/daily and /tools and /audit/detail", async () => {
   const config = loadConfig();
-  config.admin = { enabled: true, port: 18095, apiKey: "analytics-key" };
+  config.admin = { enabled: true, host: "127.0.0.1", port: 18095, apiKey: "analytics-key" };
 
   const store = new Store(":memory:");
   const registry = new Registry(store);

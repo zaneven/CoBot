@@ -593,7 +593,7 @@
   </div>
 
   <script>
-    let apiKey = localStorage.getItem("cobot_admin_key") || "cobot-admin-secret-key";
+    let apiKey = localStorage.getItem("cobot_admin_key") || "";
     document.getElementById("apiKeyInput").value = apiKey;
 
     function saveApiKey(val) {
@@ -1044,16 +1044,29 @@
       document.getElementById("logTerminal").textContent = "";
     }
 
-    // Connect SSE Log Stream with filters
-    function initLogStream() {
+    // Connect SSE Log Stream with filters using short-lived token
+    async function initLogStream() {
       const term = document.getElementById("logTerminal");
       if (currentEventSource) {
         currentEventSource.close();
+        currentEventSource = null;
       }
       term.textContent = `[System] 连接日志通道 (级别: ${currentLogFilter || 'ALL'}, 过滤: '${currentLogSearch}')...\n`;
 
       try {
-        let url = `/admin/api/logs/stream?apiKey=${encodeURIComponent(apiKey)}`;
+        const resp = await fetch("/admin/api/logs/token", {
+          method: "POST",
+          headers: getHeaders(),
+        });
+        if (!resp.ok) {
+          term.textContent += `\n[System] 获取日志 Token 失败 (${resp.status})...\n`;
+          return;
+        }
+        const data = await resp.json();
+        const token = data.token;
+        if (!token) return;
+
+        let url = `/admin/api/logs/stream?token=${encodeURIComponent(token)}`;
         if (currentLogFilter) url += `&level=${encodeURIComponent(currentLogFilter)}`;
         if (currentLogSearch) url += `&filter=${encodeURIComponent(currentLogSearch)}`;
 
@@ -1064,9 +1077,16 @@
           term.scrollTop = term.scrollHeight;
         };
         currentEventSource.onerror = () => {
-          term.textContent += "\n[System] 日志通道重连中...\n";
+          term.textContent += "\n[System] 日志通道断开，正在重连...\n";
+          if (currentEventSource) {
+            currentEventSource.close();
+            currentEventSource = null;
+          }
+          setTimeout(initLogStream, 3000);
         };
-      } catch (e) {}
+      } catch (e) {
+        term.textContent += "\n[System] 日志通道异常: " + (e.message || e) + "\n";
+      }
     }
 
     // Initial Load & Auto Refresh Interval
