@@ -486,6 +486,16 @@
         </div>
 
         <form id="configForm" onsubmit="submitConfig(event)">
+          <div class="form-group">
+            <label>Telegram Bot Token (botToken)</label>
+            <input type="password" id="cfgBotToken" placeholder="例如: 8803132305:AAGImXngzK10pEoICKLkFnrEWpo67OMvJkk">
+          </div>
+
+          <div class="form-group">
+            <label>允许访问的用户 ID 列表 (allowedUsers, 逗号或换行分隔)</label>
+            <textarea id="cfgAllowedUsers" rows="2" placeholder="例如: 6713836144"></textarea>
+          </div>
+
           <div class="form-row">
             <div class="form-group">
               <label>单次任务最大轮数 (maxTurns)</label>
@@ -734,6 +744,8 @@
         if (res.ok) {
           const data = await res.json();
           const cfg = data.config;
+          document.getElementById("cfgBotToken").value = cfg.telegramToken || "";
+          document.getElementById("cfgAllowedUsers").value = cfg.allowedUsers ? Array.from(cfg.allowedUsers).join("\n") : "";
           document.getElementById("cfgMaxTurns").value = cfg.claude?.maxTurns || "";
           document.getElementById("cfgDailyCost").value = cfg.claude?.dailyCostCapUsd || "";
           document.getElementById("cfgFlushMs").value = cfg.telegram?.flushMs || 900;
@@ -747,12 +759,17 @@
 
     async function submitConfig(e) {
       e.preventDefault();
+      const allowedUsersInput = document.getElementById("cfgAllowedUsers").value
+        .split(/[\n,]+/).map(s => s.trim()).filter(Boolean).map(Number).filter(n => Number.isFinite(n));
+
       const updates = {
         defaults: {
           maxTurns: Number(document.getElementById("cfgMaxTurns").value) || undefined,
           dailyCostCapUsd: Number(document.getElementById("cfgDailyCost").value) || undefined,
         },
         telegram: {
+          botToken: document.getElementById("cfgBotToken").value.trim() || undefined,
+          allowedUsers: allowedUsersInput.length > 0 ? allowedUsersInput : undefined,
           flushMs: Number(document.getElementById("cfgFlushMs").value) || 900,
           showToolCalls: document.getElementById("cfgShowToolCalls").value === "true",
         },

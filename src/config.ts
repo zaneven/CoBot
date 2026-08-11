@@ -80,7 +80,14 @@ export interface YamlConfig {
   projects?: string[];
   devRoots?: string[];
   defaults?: { model?: string; maxTurns?: number; dailyCostCapUsd?: number; dailyTokenCap?: number };
-  telegram?: { maxEditChars?: number; pollTimeout?: number; flushMs?: number; showToolCalls?: boolean };
+  telegram?: {
+    botToken?: string;
+    allowedUsers?: number[] | string;
+    maxEditChars?: number;
+    pollTimeout?: number;
+    flushMs?: number;
+    showToolCalls?: boolean;
+  };
   hermes?: { enabled?: boolean; apiUrl?: string; apiKey?: string };
   approval?: { mode?: ApprovalMode; skipTools?: string[]; timeoutMs?: number; timeoutAction?: "allow" | "deny" };
   admin?: { enabled?: boolean; port?: number; apiKey?: string };
@@ -186,12 +193,14 @@ export function clampTurns(v: number | undefined): number | undefined {
 export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): Config {
   const yaml = loadYaml(configPath);
 
-  const token = process.env.TELEGRAM_BOT_TOKEN ?? "";
+  const token = yaml.telegram?.botToken ?? process.env.TELEGRAM_BOT_TOKEN ?? "";
   if (!token) {
-    logger.warn("TELEGRAM_BOT_TOKEN not set; bot will not start until configured");
+    logger.warn("TELEGRAM_BOT_TOKEN / telegram.botToken not set; bot will not start until configured");
   }
 
-  const allowedUsersRaw = process.env.TELEGRAM_ALLOWED_USERS ?? "";
+  const allowedUsersRaw = yaml.telegram?.allowedUsers !== undefined
+    ? (Array.isArray(yaml.telegram.allowedUsers) ? yaml.telegram.allowedUsers.join(",") : String(yaml.telegram.allowedUsers))
+    : (process.env.TELEGRAM_ALLOWED_USERS ?? "");
   const allowedUsers = new Set(
     allowedUsersRaw
       .split(",")

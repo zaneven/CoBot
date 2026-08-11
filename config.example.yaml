@@ -11,8 +11,10 @@ devRoots:
 projects:
   # - /Users/YOU/.hermes
 
-# Streaming display options.
+# Streaming display & bot authorization options.
 telegram:
+  botToken: ""          # Telegram Bot Token (e.g. 123456789:ABCDefgh...)
+  allowedUsers: [12345678] # Whitelisted Telegram User IDs allowed to control the bot
   maxEditChars: 3500  # chars before appending a new chunk message
   pollTimeout: 30      # long-poll timeout (seconds)
   flushMs: 900         # ms between streamed edits
