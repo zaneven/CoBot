@@ -218,19 +218,19 @@ cmd_start() {
   fi
 
   echo "[+] Launching CoBot in background..."
-  nohup npm start > "${LOG_FILE}" 2>&1 &
+  nohup npx tsx src/index.ts > "${LOG_FILE}" 2>&1 &
   local new_pid=$!
 
   echo "${new_pid}" > "${PID_FILE}"
   echo "[+] CoBot process spawned (PID: ${new_pid}). Logging to bot.log"
 
-  # Wait 3 seconds to verify startup logs
-  sleep 3
+  # Wait 5 seconds to verify full startup (including Telegram getMe & command menu registration)
+  sleep 5
 
   echo "------------------------------------------"
   echo " Startup Log Preview:"
   echo "------------------------------------------"
-  tail -n 12 "${LOG_FILE}" || true
+  tail -n 15 "${LOG_FILE}" || true
   echo "------------------------------------------"
 
   if get_running_pids >/dev/null 2>&1; then
