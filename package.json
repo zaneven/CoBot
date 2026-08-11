@@ -4,6 +4,9 @@
   "private": true,
   "description": "Telegram bot that schedules and interacts with locally-active Claude Code conversations via the Claude Agent SDK.",
   "type": "module",
+  "bin": {
+    "cobot": "scripts/cobot.sh"
+  },
   "engines": {
     "node": ">=20"
   },

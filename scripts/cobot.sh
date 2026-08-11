@@ -6,9 +6,15 @@
 
 set -e
 
-# Resolve project root directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# Resolve project root directory safely across symbolic links
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "${SOURCE}" ]; do
+  DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+  SOURCE="$(readlink "${SOURCE}")"
+  [[ ${SOURCE} != /* ]] && SOURCE="${DIR}/${SOURCE}"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "${SOURCE}")" && pwd)"
+ROOT_DIR="$(cd -P "${SCRIPT_DIR}/.." && pwd)"
 
 PID_FILE="${ROOT_DIR}/data/cobot.pid"
 LOG_FILE="${ROOT_DIR}/bot.log"
@@ -70,7 +76,7 @@ get_running_pids() {
 
 cmd_install() {
   echo "=========================================="
-  echo " Installing CoBot Dependencies"
+  echo " Installing CoBot Dependencies & CLI"
   echo "=========================================="
 
   # 1. Config files check
@@ -100,8 +106,32 @@ cmd_install() {
   echo "[+] Running typecheck..."
   npm run typecheck
 
+  # 5. Register global 'cobot' command
+  echo "[+] Registering global 'cobot' CLI command..."
+  npm link --force 2>/dev/null || true
+
+  # Also attempt to create direct symlink in system/user PATH
+  local target_bin=""
+  if [ -d "/usr/local/bin" ] && [ -w "/usr/local/bin" ]; then
+    target_bin="/usr/local/bin/cobot"
+  elif [ -d "${HOME}/.local/bin" ]; then
+    target_bin="${HOME}/.local/bin/cobot"
+  elif [ -d "${HOME}/bin" ]; then
+    target_bin="${HOME}/bin/cobot"
+  fi
+
+  if [ -n "${target_bin}" ]; then
+    ln -sf "${ROOT_DIR}/scripts/cobot.sh" "${target_bin}"
+    echo "[+] Symlink created: ${target_bin} -> ${ROOT_DIR}/scripts/cobot.sh"
+  fi
+
   echo "=========================================="
   echo " CoBot Install Complete!"
+  echo " You can now run 'cobot <command>' from any directory:"
+  echo "   cobot start    - Start CoBot service"
+  echo "   cobot stop     - Stop CoBot service"
+  echo "   cobot restart  - Restart CoBot service"
+  echo "   cobot status   - View CoBot status & logs"
   echo "=========================================="
 }
 
