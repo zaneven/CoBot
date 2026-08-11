@@ -399,4 +399,85 @@ export class Store {
       : this.db.prepare("DELETE FROM approval_rules WHERE chat_id = ?").run(chatId);
     return res.changes;
   }
+
+  // ---- Admin Queries ----
+
+  listAllBindings(): Binding[] {
+    const rows = this.db
+      .prepare("SELECT chat_id, project_path, session_id, approval_mode, created_at, updated_at FROM bindings ORDER BY updated_at DESC")
+      .all() as Array<{ chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; created_at: number; updated_at: number }>;
+    return rows.map((r) => ({
+      chatId: r.chat_id,
+      projectPath: r.project_path,
+      sessionId: r.session_id,
+      approvalMode: (r.approval_mode as ApprovalMode | null) ?? null,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  listAllAuditLogs(limit = 50, offset = 0): { logs: AuditLog[]; total: number } {
+    const countRow = this.db.prepare("SELECT COUNT(*) AS c FROM audit_logs").get() as { c: number };
+    const rows = this.db
+      .prepare("SELECT * FROM audit_logs ORDER BY started_at DESC LIMIT ? OFFSET ?")
+      .all(limit, offset) as Record<string, unknown>[];
+    const logs = rows.map((r) => ({
+      id: r.id as string,
+      chatId: r.chat_id as number,
+      sessionId: (r.session_id as string | null) ?? null,
+      prompt: r.prompt as string,
+      tools: (r.tools as string) ?? "[]",
+      status: r.status as AuditLog["status"],
+      costUsd: (r.cost_usd as number | null) ?? null,
+      durationMs: (r.duration_ms as number | null) ?? null,
+      inputTokens: (r.input_tokens as number | null) ?? null,
+      outputTokens: (r.output_tokens as number | null) ?? null,
+      contextUsagePct: (r.context_usage_pct as number | null) ?? null,
+      startedAt: r.started_at as number,
+      endedAt: (r.ended_at as number | null) ?? null,
+    }));
+    return { logs, total: countRow.c };
+  }
+
+  listAllApprovalRules(): Array<{ chatId: number; toolName: string; createdAt: number }> {
+    const rows = this.db
+      .prepare("SELECT chat_id, tool_name, created_at FROM approval_rules ORDER BY created_at DESC")
+      .all() as Array<{ chat_id: number; tool_name: string; created_at: number }>;
+    return rows.map((r) => ({
+      chatId: r.chat_id,
+      toolName: r.tool_name,
+      createdAt: r.created_at,
+    }));
+  }
+
+  getAuditStats(sinceTs = 0): {
+    totalTasks: number;
+    doneTasks: number;
+    errorTasks: number;
+    abortedTasks: number;
+    totalCostUsd: number;
+    totalTokens: number;
+  } {
+    const row = this.db
+      .prepare(
+        `SELECT
+           COUNT(*) AS totalTasks,
+           SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS doneTasks,
+           SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errorTasks,
+           SUM(CASE WHEN status = 'aborted' THEN 1 ELSE 0 END) AS abortedTasks,
+           COALESCE(SUM(cost_usd), 0) AS totalCostUsd,
+           COALESCE(SUM(input_tokens + output_tokens), 0) AS totalTokens
+         FROM audit_logs
+         WHERE started_at >= ?`,
+      )
+      .get(sinceTs) as Record<string, number>;
+    return {
+      totalTasks: row.totalTasks || 0,
+      doneTasks: row.doneTasks || 0,
+      errorTasks: row.errorTasks || 0,
+      abortedTasks: row.abortedTasks || 0,
+      totalCostUsd: row.totalCostUsd || 0,
+      totalTokens: row.totalTokens || 0,
+    };
+  }
 }

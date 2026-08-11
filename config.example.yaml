@@ -35,3 +35,9 @@ defaults:
   # When exceeded, new tasks are rejected with a notice. Undefined = no cap.
   dailyCostCapUsd: 5.0    # example: $5 per chat per day
   dailyTokenCap: 200000  # example: 200k tokens per chat per day
+
+# Built-in Web Admin Panel configuration
+admin:
+  enabled: true          # true = start Web Admin HTTP server on startup
+  port: 8085             # HTTP listen port
+  apiKey: "cobot-admin-secret-key" # Secret key for Admin API bearer authentication

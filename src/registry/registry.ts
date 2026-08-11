@@ -89,6 +89,16 @@ export class Registry {
     return true;
   }
 
+  stopByTaskId(taskId: string): boolean {
+    for (const run of this.active.values()) {
+      if (run.taskId === taskId) {
+        run.abortController.abort();
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** All currently active runs (for /tasks). */
   activeRuns(): ActiveRun[] {
     return [...this.active.values()];

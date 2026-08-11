@@ -30,6 +30,12 @@ export interface ApprovalConfig {
 /** Default read-only tools that skip the approval prompt. */
 export const DEFAULT_APPROVAL_SKIP_TOOLS = ["Read", "LS", "Glob", "Grep", "TodoWrite"];
 
+export interface AdminConfig {
+  enabled: boolean;
+  port: number;
+  apiKey: string;
+}
+
 export interface Config {
   telegramToken: string;
   allowedUsers: Set<number>;
@@ -52,6 +58,7 @@ export interface Config {
     /** Interactive tool-approval settings. Omit to keep headless auto-approve. */
     approval?: ApprovalConfig;
   };
+  admin: AdminConfig;
   dbPath: string;
   projects: string[];
   /** Dev root directories whose immediate subdirectories are switchable projects. */
@@ -76,6 +83,7 @@ interface YamlConfig {
   telegram?: { maxEditChars?: number; pollTimeout?: number; flushMs?: number; showToolCalls?: boolean };
   hermes?: { enabled?: boolean; apiUrl?: string; apiKey?: string };
   approval?: { mode?: ApprovalMode; skipTools?: string[]; timeoutMs?: number; timeoutAction?: "allow" | "deny" };
+  admin?: { enabled?: boolean; port?: number; apiKey?: string };
 }
 
 function loadYaml(path: string): YamlConfig {
@@ -179,6 +187,12 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
     timeoutAction: (envStr("COBOT_APPROVAL_TIMEOUT_ACTION") ?? yaml.approval?.timeoutAction ?? "allow") as "allow" | "deny",
   };
 
+  const admin: AdminConfig = {
+    enabled: (process.env.COBOT_ADMIN_ENABLED ?? (yaml.admin?.enabled ?? true).toString()) === "true",
+    port: envNum("COBOT_ADMIN_PORT") ?? yaml.admin?.port ?? 8085,
+    apiKey: envStr("COBOT_ADMIN_API_KEY") ?? yaml.admin?.apiKey ?? "cobot-admin-secret-key",
+  };
+
   return {
     telegramToken: token,
     allowedUsers,
@@ -197,6 +211,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
       dailyTokenCap: envNum("COBOT_DAILY_TOKEN_CAP") ?? yaml.defaults?.dailyTokenCap,
       approval,
     },
+    admin,
     dbPath: process.env.COBOT_DB_PATH ?? resolve(process.cwd(), "data/cobot.db"),
     projects: (yaml.projects ?? []).map((p) => resolve(p)),
     devRoots: (yaml.devRoots ?? []).map((p) => resolve(p)),

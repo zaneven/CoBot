@@ -6,6 +6,7 @@ import { BOT_COMMANDS } from "./bot/commands.js";
 import { approvalManager } from "./bot/approval.js";
 import { logger } from "./util/logger.js";
 import { createProxyAgent } from "./util/proxy.js";
+import { AdminServer } from "./admin/server.js";
 
 async function main(): Promise<void> {
   const proxyAgent = createProxyAgent();
@@ -32,6 +33,9 @@ async function main(): Promise<void> {
   const { bot, cron: cronManager } = createBot(config, store, registry, proxyAgent);
   cronManager.startAll();
 
+  const adminServer = new AdminServer(config, store, registry, cronManager);
+  adminServer.start();
+
   bot.catch((err) => logger.error({ err: String(err.error) }, "bot error"));
 
   await bot.init();
@@ -57,6 +61,7 @@ async function main(): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info({ sig }, "shutting down");
+    adminServer.stop();
     cronManager.stopAll();
     try {
       await bot.stop();

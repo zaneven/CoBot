@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CoBot 控制台 - Admin Dashboard</title>
+  <style>
+    :root {
+      --bg-color: #0f172a;
+      --panel-bg: #1e293b;
+      --border-color: #334155;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --primary: #38bdf8;
+      --primary-hover: #0284c7;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --sidebar-width: 240px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* Sidebar Navigation */
+    aside {
+      width: var(--sidebar-width);
+      background-color: var(--panel-bg);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      padding: 1rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--primary);
+      margin-bottom: 2rem;
+      padding: 0.5rem;
+    }
+
+    .brand svg { width: 28px; height: 28px; stroke: var(--primary); fill: none; stroke-width: 2; }
+
+    nav { display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+
+    .nav-item:hover { background-color: rgba(255, 255, 255, 0.05); color: var(--text-main); }
+    .nav-item.active { background-color: var(--primary); color: #000; font-weight: 600; }
+    .nav-item svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+    .api-key-box {
+      margin-top: auto;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border-color);
+    }
+    .api-key-box input {
+      width: 100%;
+      padding: 0.5rem;
+      border-radius: 6px;
+      border: 1px solid var(--border-color);
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      font-size: 0.85rem;
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      background-color: var(--bg-color);
+    }
+
+    header {
+      padding: 1rem 2rem;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background-color: var(--panel-bg);
+    }
+
+    header h1 { font-size: 1.5rem; font-weight: 600; }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 0.85rem;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      background-color: rgba(34, 197, 94, 0.15);
+      color: var(--success);
+      border: 1px solid rgba(34, 197, 94, 0.3);
+    }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background-color: var(--success); }
+
+    .content-section { padding: 2rem; display: none; }
+    .content-section.active { display: block; }
+
+    /* Grid Layout & Cards */
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem; margin-bottom: 2rem; }
+
+    .card {
+      background-color: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card-title { font-size: 0.9rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+    .card-value { font-size: 1.8rem; font-weight: 700; color: var(--text-main); }
+    .card-sub { font-size: 0.8rem; color: var(--primary); margin-top: 0.5rem; }
+
+    /* Tables */
+    .table-container {
+      background-color: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 2rem;
+    }
+    .table-header {
+      padding: 1rem 1.5rem;
+      border-bottom: 1px solid var(--border-color);
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem; }
+    th { padding: 1rem 1.5rem; background-color: rgba(0, 0, 0, 0.2); color: var(--text-muted); font-weight: 600; }
+    td { padding: 1rem 1.5rem; border-bottom: 1px solid var(--border-color); }
+    tr:last-child td { border-bottom: none; }
+
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge-done { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+    .badge-running { background: rgba(56, 189, 248, 0.15); color: var(--primary); }
+    .badge-error { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+    .badge-aborted { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+
+    /* Buttons */
+    .btn {
+      padding: 0.4rem 0.8rem;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.85; }
+    .btn-danger { background-color: var(--danger); color: #fff; }
+    .btn-primary { background-color: var(--primary); color: #000; }
+
+    /* Terminal Log Output */
+    .terminal {
+      background-color: #090d16;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1rem;
+      font-family: "Fira Code", monospace, sans-serif;
+      font-size: 0.85rem;
+      height: 600px;
+      overflow-y: auto;
+      color: #38bdf8;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+
+  <aside>
+    <div class="brand">
+      <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+      CoBot Admin
+    </div>
+
+    <nav>
+      <div class="nav-item active" onclick="switchTab('dashboard')">
+        <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+        概览大盘
+      </div>
+      <div class="nav-item" onclick="switchTab('tasks')">
+        <svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+        任务与审计
+      </div>
+      <div class="nav-item" onclick="switchTab('cron')">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        定时任务
+      </div>
+      <div class="nav-item" onclick="switchTab('bindings')">
+        <svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+        绑定与授权
+      </div>
+      <div class="nav-item" onclick="switchTab('logs')">
+        <svg viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+        实时日志
+      </div>
+    </nav>
+
+    <div class="api-key-box">
+      <label style="font-size:0.75rem; color:var(--text-muted); display:block; margin-bottom:0.25rem;">API Key 鉴权</label>
+      <input type="password" id="apiKeyInput" placeholder="输入 Admin API Key" onchange="saveApiKey(this.value)">
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <h1 id="pageTitle">概览大盘</h1>
+      <div class="status-badge">
+        <div class="status-dot"></div>
+        系统运行正常
+      </div>
+    </header>
+
+    <!-- Dashboard Tab -->
+    <div id="dashboard" class="content-section active">
+      <div class="grid">
+        <div class="card">
+          <div class="card-title">系统在线运行时间</div>
+          <div class="card-value" id="valUptime">--</div>
+          <div class="card-sub" id="valPid">PID: --</div>
+        </div>
+        <div class="card">
+          <div class="card-title">当前活跃并发任务</div>
+          <div class="card-value" id="valActiveTasks">0</div>
+          <div class="card-sub">单 Chat FIFO 队列管理</div>
+        </div>
+        <div class="card">
+          <div class="card-title">累计任务数 / 成功率</div>
+          <div class="card-value" id="valTotalTasks">0</div>
+          <div class="card-sub" id="valSuccessRate">成功率: --%</div>
+        </div>
+        <div class="card">
+          <div class="card-title">累计成本与 Token 消耗</div>
+          <div class="card-value" id="valTotalCost">$0.00</div>
+          <div class="card-sub" id="valTotalTokens">Tokens: 0</div>
+        </div>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header">当前正在运行的任务 (Active Runs)</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Task ID</th>
+              <th>Chat ID</th>
+              <th>工程路径</th>
+              <th>Prompt 内容</th>
+              <th>耗时</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="activeTasksBody">
+            <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">暂无运行中的任务</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tasks & Audit Tab -->
+    <div id="tasks" class="content-section">
+      <div class="table-container">
+        <div class="table-header">历史任务审计日志 (Audit Logs)</div>
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>Chat ID</th>
+              <th>Status</th>
+              <th>Prompt</th>
+              <th>工具使用</th>
+              <th>Tokens (In/Out)</th>
+              <th>Cost ($USD)</th>
+              <th>耗时 (ms)</th>
+            </tr>
+          </thead>
+          <tbody id="auditLogsBody">
+            <tr><td colspan="8" style="text-align:center; color:var(--text-muted);">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Cron Tab -->
+    <div id="cron" class="content-section">
+      <div class="table-container">
+        <div class="table-header">定时任务列表 (Cron Jobs)</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Cron ID</th>
+              <th>Chat ID</th>
+              <th>Schedule</th>
+              <th>Prompt</th>
+              <th>启用状态</th>
+              <th>最后执行时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="cronBody">
+            <tr><td colspan="7" style="text-align:center; color:var(--text-muted);">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Bindings Tab -->
+    <div id="bindings" class="content-section">
+      <div class="table-container">
+        <div class="table-header">Chat 绑定的本地工程目录</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Chat ID</th>
+              <th>Project Path</th>
+              <th>Session ID</th>
+              <th>授权模式</th>
+              <th>更新时间</th>
+            </tr>
+          </thead>
+          <tbody id="bindingsBody">
+            <tr><td colspan="5" style="text-align:center; color:var(--text-muted);">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-container">
+        <div class="table-header">免审批工具授权规则 (Approval Rules)</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Chat ID</th>
+              <th>信任工具名称</th>
+              <th>添加时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="rulesBody">
+            <tr><td colspan="4" style="text-align:center; color:var(--text-muted);">加载中...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Logs Tab -->
+    <div id="logs" class="content-section">
+      <div class="terminal" id="logTerminal">正在连接日志流通道...</div>
+    </div>
+  </main>
+
+  <script>
+    let apiKey = localStorage.getItem("cobot_admin_key") || "cobot-admin-secret-key";
+    document.getElementById("apiKeyInput").value = apiKey;
+
+    function saveApiKey(val) {
+      apiKey = val;
+      localStorage.setItem("cobot_admin_key", val);
+      refreshData();
+    }
+
+    function getHeaders() {
+      return { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json" };
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll(".nav-item").forEach(el => el.classList.remove("active"));
+      document.querySelectorAll(".content-section").forEach(el => el.classList.remove("active"));
+
+      event.currentTarget.classList.add("active");
+      document.getElementById(tabId).classList.add("active");
+
+      const titles = {
+        dashboard: "概览大盘",
+        tasks: "任务与审计",
+        cron: "定时任务",
+        bindings: "绑定与授权",
+        logs: "实时日志"
+      };
+      document.getElementById("pageTitle").innerText = titles[tabId] || "CoBot Admin";
+
+      refreshData();
+    }
+
+    function formatTime(ms) {
+      if (!ms) return "--";
+      return new Date(ms).toLocaleString();
+    }
+
+    function formatUptime(seconds) {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = seconds % 60;
+      return `${h}h ${m}m ${s}s`;
+    }
+
+    async function abortTask(taskId) {
+      if (!confirm("确定要强行中断该任务吗？")) return;
+      try {
+        const res = await fetch("/admin/api/tasks/abort", {
+          method: "POST",
+          headers: getHeaders(),
+          body: JSON.stringify({ taskId })
+        });
+        const data = await res.json();
+        alert(data.message || "请求完成");
+        refreshData();
+      } catch (err) {
+        alert("操作失败: " + err);
+      }
+    }
+
+    async function toggleCron(id, enabled) {
+      try {
+        await fetch("/admin/api/cron/toggle", {
+          method: "POST",
+          headers: getHeaders(),
+          body: JSON.stringify({ id, enabled })
+        });
+        refreshData();
+      } catch (err) {
+        alert("切换失败: " + err);
+      }
+    }
+
+    async function deleteRule(chatId, toolName) {
+      if (!confirm(`确定撤销工具 ${toolName} 的自动授权规则吗？`)) return;
+      try {
+        await fetch("/admin/api/approval-rules", {
+          method: "DELETE",
+          headers: getHeaders(),
+          body: JSON.stringify({ chatId, toolName })
+        });
+        refreshData();
+      } catch (err) {
+        alert("撤销失败: " + err);
+      }
+    }
+
+    async function refreshData() {
+      // 1. Fetch Status
+      try {
+        const res = await fetch("/admin/api/status", { headers: getHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById("valUptime").innerText = formatUptime(data.uptimeSeconds);
+          document.getElementById("valPid").innerText = `PID: ${data.pid} | Node: ${data.nodeVersion}`;
+          document.getElementById("valActiveTasks").innerText = data.activeTaskCount;
+        }
+      } catch (e) {}
+
+      // 2. Fetch Stats
+      try {
+        const res = await fetch("/admin/api/stats", { headers: getHeaders() });
+        if (res.ok) {
+          const stats = await res.json();
+          document.getElementById("valTotalTasks").innerText = stats.totalTasks;
+          const rate = stats.totalTasks ? Math.round((stats.doneTasks / stats.totalTasks) * 100) : 100;
+          document.getElementById("valSuccessRate").innerText = `成功率: ${rate}% (完成: ${stats.doneTasks}, 错误: ${stats.errorTasks})`;
+          document.getElementById("valTotalCost").innerText = `$${(stats.totalCostUsd || 0).toFixed(4)}`;
+          document.getElementById("valTotalTokens").innerText = `Tokens: ${stats.totalTokens.toLocaleString()}`;
+        }
+      } catch (e) {}
+
+      // 3. Fetch Active Tasks
+      try {
+        const res = await fetch("/admin/api/tasks", { headers: getHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          const body = document.getElementById("activeTasksBody");
+          if (!data.activeTasks || data.activeTasks.length === 0) {
+            body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">暂无运行中的任务</td></tr>';
+          } else {
+            body.innerHTML = data.activeTasks.map(t => `
+              <tr>
+                <td><code>${t.taskId.slice(0, 8)}...</code></td>
+                <td>${t.chatId}</td>
+                <td>${t.projectPath}</td>
+                <td>${t.displayText}</td>
+                <td>${Math.floor((Date.now() - t.startedAt)/1000)}s</td>
+                <td><button class="btn btn-danger" onclick="abortTask('${t.taskId}')">中断</button></td>
+              </tr>
+            `).join("");
+          }
+        }
+      } catch (e) {}
+
+      // 4. Audit Logs
+      try {
+        const res = await fetch("/admin/api/audit?limit=30", { headers: getHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          const body = document.getElementById("auditLogsBody");
+          body.innerHTML = data.logs.map(l => `
+            <tr>
+              <td>${formatTime(l.startedAt)}</td>
+              <td>${l.chatId}</td>
+              <td><span class="badge badge-${l.status}">${l.status}</span></td>
+              <td>${l.prompt}</td>
+              <td><code>${l.tools}</code></td>
+              <td>${(l.inputTokens || 0) + (l.outputTokens || 0)}</td>
+              <td>$${(l.costUsd || 0).toFixed(4)}</td>
+              <td>${l.durationMs || "--"}</td>
+            </tr>
+          `).join("");
+        }
+      } catch (e) {}
+
+      // 5. Cron Jobs
+      try {
+        const res = await fetch("/admin/api/cron", { headers: getHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          const body = document.getElementById("cronBody");
+          body.innerHTML = data.cronJobs.map(c => `
+            <tr>
+              <td><code>${c.id.slice(0, 8)}</code></td>
+              <td>${c.chatId}</td>
+              <td><code>${c.schedule}</code></td>
+              <td>${c.prompt}</td>
+              <td><span class="badge ${c.enabled ? 'badge-done' : 'badge-aborted'}">${c.enabled ? '已启用' : '已禁用'}</span></td>
+              <td>${formatTime(c.lastRunAt)}</td>
+              <td><button class="btn btn-primary" onclick="toggleCron('${c.id}', ${!c.enabled})">${c.enabled ? '禁用' : '启用'}</button></td>
+            </tr>
+          `).join("");
+        }
+      } catch (e) {}
+
+      // 6. Bindings & Rules
+      try {
+        const res = await fetch("/admin/api/bindings", { headers: getHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          const body = document.getElementById("bindingsBody");
+          body.innerHTML = data.bindings.map(b => `
+            <tr>
+              <td>${b.chatId}</td>
+              <td><code>${b.projectPath}</code></td>
+              <td><code>${b.sessionId || '--'}</code></td>
+              <td><span class="badge badge-running">${b.approvalMode || 'default'}</span></td>
+              <td>${formatTime(b.updatedAt)}</td>
+            </tr>
+          `).join("");
+        }
+      } catch (e) {}
+
+      try {
+        const res = await fetch("/admin/api/approval-rules", { headers: getHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          const body = document.getElementById("rulesBody");
+          body.innerHTML = data.rules.map(r => `
+            <tr>
+              <td>${r.chatId}</td>
+              <td><code>${r.toolName}</code></td>
+              <td>${formatTime(r.createdAt)}</td>
+              <td><button class="btn btn-danger" onclick="deleteRule(${r.chatId}, '${r.toolName}')">撤销</button></td>
+            </tr>
+          `).join("");
+        }
+      } catch (e) {}
+    }
+
+    // Connect SSE Log Stream
+    function initLogStream() {
+      const term = document.getElementById("logTerminal");
+      try {
+        const eventSource = new EventSource("/admin/api/logs/stream?apiKey=" + encodeURIComponent(apiKey));
+        eventSource.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          term.textContent += data.log + "\n";
+          term.scrollTop = term.scrollHeight;
+        };
+        eventSource.onerror = () => {
+          term.textContent += "\n[System] 日志推拉重连中...\n";
+        };
+      } catch (e) {}
+    }
+
+    // Initial Load & Auto Refresh Interval
+    refreshData();
+    initLogStream();
+    setInterval(refreshData, 5000);
+  </script>
+</body>
+</html>
