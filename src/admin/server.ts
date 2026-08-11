@@ -1,7 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Config } from "../config.js";
+import { loadConfig, saveYamlConfig, readRawYamlContent, listDevProjects, type Config, type YamlConfig } from "../config.js";
 import type { Store } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
 import type { CronManager } from "../scheduler/cron.js";
@@ -29,6 +29,7 @@ export class AdminServer {
     private store: Store,
     private registry: Registry,
     private cronManager?: CronManager,
+    private configPath = resolve(process.cwd(), "config.yaml"),
   ) {}
 
   start(): void {
@@ -228,7 +229,47 @@ export class AdminServer {
         bindings,
         projects: this.config.projects,
         devRoots: this.config.devRoots,
+        devProjects: listDevProjects(this.config),
       });
+    }
+
+    if (pathname === "/admin/api/bindings" && req.method === "POST") {
+      const body = await this.readJsonBody<{ chatId: number; projectPath: string }>(req);
+      if (!body.chatId || !body.projectPath) {
+        return json({ error: "Missing chatId or projectPath" }, 400);
+      }
+      this.store.upsertBinding(body.chatId, body.projectPath);
+      return json({ success: true });
+    }
+
+    if (pathname === "/admin/api/bindings" && req.method === "DELETE") {
+      const body = await this.readJsonBody<{ chatId: number }>(req);
+      if (!body.chatId) {
+        return json({ error: "Missing chatId" }, 400);
+      }
+      this.store.clearBinding(body.chatId);
+      return json({ success: true });
+    }
+
+    // 8. Online Config Management
+    if (pathname === "/admin/api/config" && req.method === "GET") {
+      return json({
+        config: this.config,
+        rawYaml: readRawYamlContent(this.configPath),
+        devProjects: listDevProjects(this.config),
+      });
+    }
+
+    if (pathname === "/admin/api/config" && req.method === "POST") {
+      const updates = await this.readJsonBody<Partial<YamlConfig>>(req);
+      saveYamlConfig(updates, this.configPath);
+      // Hot-reload memory config
+      this.config = loadConfig(this.configPath);
+      return json({ success: true, config: this.config, rawYaml: readRawYamlContent(this.configPath) });
+    }
+
+    if (pathname === "/admin/api/dev-projects" && req.method === "GET") {
+      return json({ devProjects: listDevProjects(this.config) });
     }
 
     // 8. Approval Rules (Tool Whitelist)

@@ -1,7 +1,7 @@
-import { readFileSync, existsSync, readdirSync, type Dirent } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, type Dirent } from "node:fs";
 import { resolve } from "node:path";
 import dotenv from "dotenv";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { logger } from "./util/logger.js";
 import type { ApprovalMode } from "./store/db.js";
 
@@ -76,7 +76,7 @@ export interface Config {
   logLevel: string;
 }
 
-interface YamlConfig {
+export interface YamlConfig {
   projects?: string[];
   devRoots?: string[];
   defaults?: { model?: string; maxTurns?: number; dailyCostCapUsd?: number; dailyTokenCap?: number };
@@ -84,6 +84,56 @@ interface YamlConfig {
   hermes?: { enabled?: boolean; apiUrl?: string; apiKey?: string };
   approval?: { mode?: ApprovalMode; skipTools?: string[]; timeoutMs?: number; timeoutAction?: "allow" | "deny" };
   admin?: { enabled?: boolean; port?: number; apiKey?: string };
+}
+
+export function readRawYamlContent(configPath = resolve(process.cwd(), "config.yaml")): string {
+  if (!existsSync(configPath)) return "";
+  try {
+    return readFileSync(configPath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+export function saveYamlConfig(updates: Partial<YamlConfig>, configPath = resolve(process.cwd(), "config.yaml")): YamlConfig {
+  const currentYaml = loadYaml(configPath);
+  const merged: YamlConfig = {
+    ...currentYaml,
+    ...updates,
+  };
+
+  if (updates.defaults || currentYaml.defaults) {
+    merged.defaults = { ...currentYaml.defaults, ...updates.defaults };
+  }
+  if (updates.telegram || currentYaml.telegram) {
+    merged.telegram = { ...currentYaml.telegram, ...updates.telegram };
+  }
+  if (updates.approval || currentYaml.approval) {
+    merged.approval = { ...currentYaml.approval, ...updates.approval };
+  }
+  if (updates.admin || currentYaml.admin) {
+    merged.admin = { ...currentYaml.admin, ...updates.admin };
+  }
+  if (updates.hermes || currentYaml.hermes) {
+    merged.hermes = { ...currentYaml.hermes, ...updates.hermes };
+  }
+
+  const cleanObject = (obj: any): any => {
+    if (Array.isArray(obj)) return obj;
+    if (obj !== null && typeof obj === "object") {
+      const out: any = {};
+      for (const [k, v] of Object.entries(obj)) {
+        if (v !== undefined) out[k] = cleanObject(v);
+      }
+      return out;
+    }
+    return obj;
+  };
+
+  const cleaned = cleanObject(merged);
+  const yamlString = stringifyYaml(cleaned);
+  writeFileSync(configPath, yamlString, "utf8");
+  return merged;
 }
 
 function loadYaml(path: string): YamlConfig {
