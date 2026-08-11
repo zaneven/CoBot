@@ -480,4 +480,85 @@ export class Store {
       totalTokens: row.totalTokens || 0,
     };
   }
+
+  getAuditLogById(id: string): AuditLog | undefined {
+    const r = this.db.prepare("SELECT * FROM audit_logs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    if (!r) return undefined;
+    return {
+      id: r.id as string,
+      chatId: r.chat_id as number,
+      sessionId: (r.session_id as string | null) ?? null,
+      prompt: r.prompt as string,
+      tools: (r.tools as string) ?? "[]",
+      status: r.status as AuditLog["status"],
+      costUsd: (r.cost_usd as number | null) ?? null,
+      durationMs: (r.duration_ms as number | null) ?? null,
+      inputTokens: (r.input_tokens as number | null) ?? null,
+      outputTokens: (r.output_tokens as number | null) ?? null,
+      contextUsagePct: (r.context_usage_pct as number | null) ?? null,
+      startedAt: r.started_at as number,
+      endedAt: (r.ended_at as number | null) ?? null,
+    };
+  }
+
+  getDailyAnalytics(days = 7): Array<{
+    date: string;
+    totalTasks: number;
+    doneTasks: number;
+    errorTasks: number;
+    abortedTasks: number;
+    totalCostUsd: number;
+    totalTokens: number;
+  }> {
+    const sinceTs = Date.now() - days * 24 * 60 * 60 * 1000;
+    const rows = this.db
+      .prepare(
+        `SELECT
+           strftime('%Y-%m-%d', started_at / 1000, 'unixepoch', 'localtime') AS date,
+           COUNT(*) AS totalTasks,
+           SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS doneTasks,
+           SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS errorTasks,
+           SUM(CASE WHEN status = 'aborted' THEN 1 ELSE 0 END) AS abortedTasks,
+           COALESCE(SUM(cost_usd), 0) AS totalCostUsd,
+           COALESCE(SUM(input_tokens + output_tokens), 0) AS totalTokens
+         FROM audit_logs
+         WHERE started_at >= ?
+         GROUP BY date
+         ORDER BY date ASC`,
+      )
+      .all(sinceTs) as Array<Record<string, unknown>>;
+
+    return rows.map((r) => ({
+      date: (r.date as string) || "Unknown",
+      totalTasks: Number(r.totalTasks || 0),
+      doneTasks: Number(r.doneTasks || 0),
+      errorTasks: Number(r.errorTasks || 0),
+      abortedTasks: Number(r.abortedTasks || 0),
+      totalCostUsd: Number(r.totalCostUsd || 0),
+      totalTokens: Number(r.totalTokens || 0),
+    }));
+  }
+
+  getToolUsageDistribution(): Array<{ tool: string; count: number }> {
+    const rows = this.db
+      .prepare("SELECT tools FROM audit_logs WHERE tools IS NOT NULL AND tools != '' AND tools != '[]'")
+      .all() as Array<{ tools: string }>;
+
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      try {
+        const parsed = JSON.parse(r.tools);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            const toolName = typeof item === "string" ? item : ((item as any).name || (item as any).tool || String(item));
+            counts.set(toolName, (counts.get(toolName) || 0) + 1);
+          }
+        }
+      } catch {}
+    }
+
+    return [...counts.entries()]
+      .map(([tool, count]) => ({ tool, count }))
+      .sort((a, b) => b.count - a.count);
+  }
 }

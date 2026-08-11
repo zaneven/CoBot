@@ -285,6 +285,26 @@ export class AdminServer {
       return json({ success: true, deletedCount });
     }
 
+    // 9. Multi-dimensional Analytics & Audit Detail (Phase 2)
+    if (pathname === "/admin/api/analytics/daily" && req.method === "GET") {
+      const days = Number(url.searchParams.get("days") || "7");
+      const dailyData = this.store.getDailyAnalytics(days);
+      return json({ daily: dailyData });
+    }
+
+    if (pathname === "/admin/api/analytics/tools" && req.method === "GET") {
+      const toolDistribution = this.store.getToolUsageDistribution();
+      return json({ tools: toolDistribution });
+    }
+
+    if (pathname === "/admin/api/audit/detail" && req.method === "GET") {
+      const id = url.searchParams.get("id");
+      if (!id) return json({ error: "Missing audit id" }, 400);
+      const audit = this.store.getAuditLogById(id);
+      if (!audit) return json({ error: "Audit log not found" }, 404);
+      return json({ audit });
+    }
+
     // 9. SSE Log Stream Endpoint
     if (pathname === "/admin/api/logs/stream" && req.method === "GET") {
       res.writeHead(200, {
