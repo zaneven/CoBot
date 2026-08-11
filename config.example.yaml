@@ -18,6 +18,20 @@ telegram:
   flushMs: 900         # ms between streamed edits
   showToolCalls: false # true = stream Bash/Read/Write tool calls to chat
 
-# Defaults applied to every Claude run unless overridden by a /run flag.
+# Interactive tool-call approval. Override per-chat at runtime with /approve.
+# env: COBOT_APPROVAL_MODE, COBOT_APPROVAL_TIMEOUT_MS, COBOT_APPROVAL_TIMEOUT_ACTION,
+#      COBOT_APPROVAL_SKIP_TOOLS (comma-separated).
+approval:
+  mode: auto            # auto = headless auto-approve; interactive = prompt for mutating tools
+  timeoutMs: 300000     # per-request approval timeout (must be < taskTimeoutMs)
+  timeoutAction: allow  # decision when the user doesn't respond: allow | deny
+  skipTools: [Read, LS, Glob, Grep, TodoWrite]  # never prompt for these (read-only)
+
+# Defaults applied to every Claude run unless overridden by env / a /run flag.
 defaults:
-  maxTurns: 0  # max agentic turns per task (0 = unlimited)
+  # maxTurns: omit → conservative default (DEFAULT_MAX_TURNS = 50).
+  # Set a number to cap agentic turns per task; 0 = unlimited (SDK default).
+  # dailyCostCapUsd / dailyTokenCap: optional per-chat daily ceilings.
+  # When exceeded, new tasks are rejected with a notice. Undefined = no cap.
+  dailyCostCapUsd: 5.0    # example: $5 per chat per day
+  dailyTokenCap: 200000  # example: 200k tokens per chat per day

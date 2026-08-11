@@ -45,9 +45,10 @@ npm start
 | `/cron list / rm <id> / enable <id> / disable <id>` | Manage cron jobs |
 | `/context` | Last turn's context-window usage (%) |
 | `/skills` | Browse available Skills (tap to use) |
+| `/approve auto\|interactive\|list\|clear <tool\|all>` | Tool-call approval mode |
 | `/help` | Show this list |
 
-**Keyboard buttons:** `项目` `会话` `新建` — `停止` `队列` `任务`
+**Keyboard buttons:** `项目` `会话` `新建` — `停止` `队列` `任务` — `审批`
 
 **Plain text** or **photo/document**: sends the input to Claude Code (streaming).
 
@@ -104,12 +105,39 @@ src/
 - `/bind` only accepts paths whitelisted in `config.yaml` (`devRoots`).
 - Permission mode defaults to `acceptEdits` (headless: auto‑approves tool use).
 
+## Guardrails
+
+CoBot is a headless agent with local code‑execution power, so it ships guardrails
+to keep autonomous use **controllable and observable**:
+
+- **Per‑task turn cap** — `DEFAULT_MAX_TURNS = 50` (override via `CLAUDE_MAX_TURNS`
+  or `defaults.maxTurns` in `config.yaml`; set `0` for unlimited).
+- **Per‑chat daily quota** — optional `dailyCostCapUsd` / `dailyTokenCap`
+  (env `COBOT_DAILY_COST_CAP_USD` / `COBOT_DAILY_TOKEN_CAP`, or `defaults.*`).
+  When a chat's spend/tokens for the day exceed the cap, new tasks are rejected
+  with a notice. The window resets at local midnight.
+- **Audit log** — every task is recorded in the `audit_logs` table
+  (`chatId`, `prompt`, tools used, `costUsd`, `durationMs`, token counts,
+  `contextUsagePct`, `status`). Query it for cost accounting and forensics.
+- **Interactive tool approval** — `/approve interactive` prompts before mutating
+  tool calls (read‑only tools in `skipTools` skip the prompt); tap ✅/❌/⭐
+  (always allow). Mode and "always allow" rules persist in SQLite. Cron tasks
+  always auto‑approve (unattended). Default mode is `auto` (headless). Timeout
+  action defaults to `allow` ("approve when present, auto‑run when away") — set
+  `COBOT_APPROVAL_TIMEOUT_ACTION=deny` to fail closed.
+
 ## Testing
 
 ```bash
-npm test          # 89 tests, Node built‑in runner
-npm run typecheck # tsc --noEmit
+npm test                # 122 tests, Node built‑in runner
+npm run typecheck      # tsc --noEmit
+npm run rebuild:native # rebuild better-sqlite3 after a Node version change
 ```
+
+> **CI note:** `better-sqlite3` is a native module — after `npm ci`, run
+> `npm run rebuild:native` (or `npm rebuild better-sqlite3`) so the binary
+> matches the CI Node version, or the Store‑backed tests fail with
+> `ERR_DLOPEN_FAILED`.
 
 | File | Tests | Covers |
 |---|---|---|
@@ -118,8 +146,9 @@ npm run typecheck # tsc --noEmit
 | `streaming.test.ts` | 16 | Rich Markdown markup, pipeline, fallback |
 | `driver.test.ts` | 2 | buildSdkPrompt fast/slow path |
 | `runs.test.ts` | 3 | submitInteractive queue/enqueue/await |
-| `db.test.ts` | 17 | SQLite CRUD for bindings, adds, updates, cron |
+| `db.test.ts` | 36 | SQLite CRUD for bindings, adds, updates, cron, **audit log** |
 | `registry.test.ts` | 8 | enqueue/dequeue/drop, auto mode |
 | `tgfmt.test.ts` | 30 | HTML conversion + escape + table rendering |
+| `config.test.ts` | 6 | config loading, clamp/num helpers |
 
 See [`docs/`](docs/) for command reference, development guide, and Markdown rendering details.

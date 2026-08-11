@@ -1,6 +1,6 @@
 import type { Api } from "grammy";
 import { logger } from "../util/logger.js";
-import { mdToTelegramHtml, escapeMd } from "../util/tgfmt.js";
+import { mdToTelegramHtml, escapeMd, sanitizeStreamMarkdown } from "../util/tgfmt.js";
 
 /** Telegram Rich Message hard limit is 32768 UTF-8 chars. We chunk at 32000. */
 const TG_HARD_LIMIT = 32000;
@@ -16,6 +16,8 @@ const TG_HARD_LIMIT = 32000;
  */
 export class TelegramStreamer {
   private buffer = "";
+  /** Optional top-of-message meta line (e.g. "⏱️ 思考 … · 🔧 调用 N 工具"). */
+  private header = "";
   private lastMessageId: number | undefined;
   private displayedLen = 0;
   private dirty = false;
@@ -59,6 +61,42 @@ export class TelegramStreamer {
     );
   }
 
+  /**
+   * Append a reasoning ("thinking") fragment. Used for the ① think-message so
+   * the live reasoning is visible without duplicating the final answer (which
+   * lives in ②). Kept as a distinct method only for semantic clarity; it routes
+   * through the same transport as text().
+   */
+  thinkingFragment(delta: string): Promise<void> {
+    return this.text(delta);
+  }
+
+  /**
+   * Set/replace the top-of-message meta line. Rendered above the streamed body
+   * on the next flush, so callers can update it live (e.g. as tool calls land).
+   * No-op when unchanged or after finalize.
+   */
+  setHeader(h: string): void {
+    if (this.finished || h === this.header) return;
+    this.header = h;
+    this.dirty = true;
+    this.schedule();
+  }
+
+  /**
+   * Append a Claude-Code-style run summary block to the end of the streamed
+   * message (never sent separately, so it stays attached to the answer).
+   * Call once, just before finalize(), on success. The caller formats the
+   * content — this just routes it through the same transport as text().
+   */
+  summary(markdown: string): Promise<void> {
+    if (this.finished || !markdown) return Promise.resolve();
+    this.buffer += `\n\n${markdown.replace(/\n{2,}/g, "\n")}`;
+    this.dirty = true;
+    this.schedule();
+    return Promise.resolve();
+  }
+
   private schedule(): void {
     if (this.timer || this.finished) return;
     this.timer = setTimeout(() => {
@@ -74,8 +112,9 @@ export class TelegramStreamer {
     }
     if (!this.dirty) return Promise.resolve();
     this.dirty = false;
-    const text = this.buffer.replace(/\n{3,}/g, "\n\n");
-    if (!text) return Promise.resolve();
+    const body = this.buffer.replace(/\n{3,}/g, "\n\n");
+    const text = this.header ? `${this.header}\n\n${body}` : body;
+    if (!text.trim()) return Promise.resolve();
     return this.enqueue(() => this.send(text));
   }
 
@@ -253,42 +292,4 @@ function needsRich(md: string): boolean {
   // Checklist: lines starting with "- [ ]" or "- [x]".
   if (/^[\s]*[-*+]\s+\[[ x]\]/m.test(md)) return true;
   return false;
-}
-
-/** Sanitise mid-stream markdown before sending to Telegram's Rich Message
- *  parser. Balances fenced code blocks and cleans trailing partial inline
- *  markdown so Telegram won't reject the payload or render broken content
- *  while the next flush is still building.
- *
- *  Return the sanitised string — good-faith replacement that won't
- *  structurally break the message.  */
-function sanitizeStreamMarkdown(md: string): string {
-  let ret = md;
-
-  // ── balance fenced code blocks ──────────────────────────────────
-  let tickOpen = false;
-  let tildeOpen = false;
-  for (const line of ret.split("\n")) {
-    if (line.trimStart().startsWith("```")) tickOpen = !tickOpen;
-    else if (line.trimStart().startsWith("~~~")) tildeOpen = !tildeOpen;
-  }
-  if (tickOpen) ret += "\n```";
-  if (tildeOpen) ret += "\n~~~";
-
-  // ── receding broken constructs that paste partial markup ───────
-  // A trailing lone backtick without a matching close partner → escape it.
-  // eg `code mist is invalid mid-stream.
-  if (/`(?!`)(?=[^`]*$)/.test(ret) && (ret.match(/`/g) ?? []).length % 2 === 1) {
-    ret = ret.slice(0, ret.lastIndexOf("`")) + "\\`" + ret.slice(ret.lastIndexOf("`") + 1);
-  }
-
-  // Trailing unclosed link `[...](url` → escape the bracket.
-  // Only if it looks mid-stream: no closing `)` after the `](`.
-  const link = ret.match(/\[([^\]]+)\]\(([^()]*)$/);
-  if (link && !ret.slice(ret.lastIndexOf("](") + 2).includes(")")) {
-    const idx = ret.lastIndexOf("](");
-    ret = ret.slice(0, idx) + "\\[\\" + ret.slice(idx);
-  }
-
-  return ret;
 }

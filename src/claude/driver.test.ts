@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PromptInput } from "./types.js";
-import { buildSdkPrompt, parseContextFromModelId, computeContextUsagePct, mapContentBlockDelta } from "./driver.js";
+import { buildSdkPrompt, parseContextFromModelId, computeContextUsagePct, mapContentBlockDelta, buildPermissionRequest, toSdkPermissionResult, shouldStartRound } from "./driver.js";
 import type { ModelUsage } from "@anthropic-ai/claude-agent-sdk";
 
 type Block = { type: string; text?: string; source?: { type: string; media_type: string; data: string } };
@@ -194,6 +194,74 @@ test("mapContentBlockDelta: empty thinking/text → null (no spurious event)", (
 test("mapContentBlockDelta: signature_delta is ignored", () => {
   assert.equal(mapContentBlockDelta({ type: "signature_delta", thinking: "sig" }), null);
   assert.equal(mapContentBlockDelta({ type: "input_json_delta" } as any), null);
+});
+
+// ─── shouldStartRound: agentic-turn (round) boundaries ──────────────────
+
+test("shouldStartRound: first text delta opens round 1", () => {
+  const r = shouldStartRound({ roundActive: false, pendingNewRound: false }, "text");
+  assert.deepEqual(r, { start: true, roundActive: true, pendingNewRound: false });
+});
+
+test("shouldStartRound: first thinking delta also opens a round", () => {
+  const r = shouldStartRound({ roundActive: false, pendingNewRound: false }, "thinking");
+  assert.deepEqual(r, { start: true, roundActive: true, pendingNewRound: false });
+});
+
+test("shouldStartRound: more text within the same round does NOT open a new one", () => {
+  const r = shouldStartRound({ roundActive: true, pendingNewRound: false }, "text");
+  assert.deepEqual(r, { start: false, roundActive: true, pendingNewRound: false });
+});
+
+test("shouldStartRound: a tool_use flags pendingNewRound (no round opened yet)", () => {
+  const r = shouldStartRound({ roundActive: true, pendingNewRound: false }, "tool");
+  assert.deepEqual(r, { start: false, roundActive: true, pendingNewRound: true });
+});
+
+test("shouldStartRound: text after a tool-using turn opens the next round", () => {
+  const r = shouldStartRound({ roundActive: true, pendingNewRound: true }, "text");
+  assert.deepEqual(r, { start: true, roundActive: true, pendingNewRound: false });
+});
+
+test("shouldStartRound: thinking after a tool-using turn also opens the next round", () => {
+  const r = shouldStartRound({ roundActive: true, pendingNewRound: true }, "thinking");
+  assert.deepEqual(r, { start: true, roundActive: true, pendingNewRound: false });
+});
+
+test("shouldStartRound: consecutive tool_use keeps pendingNewRound set", () => {
+  const r = shouldStartRound({ roundActive: true, pendingNewRound: true }, "tool");
+  assert.deepEqual(r, { start: false, roundActive: true, pendingNewRound: true });
+});
+
+// ─── canUseTool bridge mappers ─────────────────────────────────────────
+
+test("buildPermissionRequest forwards SDK opts into a bot-layer request", () => {
+  const req = buildPermissionRequest(
+    "Bash",
+    { command: "ls -la" },
+    { requestId: "rq-1", toolUseID: "tu-1", title: "Claude wants to run Bash", displayName: "Run command", description: "d", suggestions: [] },
+    "/cwd",
+  );
+  assert.equal(req.toolName, "Bash");
+  assert.equal(req.requestId, "rq-1");
+  assert.equal(req.toolUseID, "tu-1");
+  assert.equal(req.title, "Claude wants to run Bash");
+  assert.equal(req.displayName, "Run command");
+  assert.deepEqual(req.input, { command: "ls -la" });
+  assert.equal(req.cwd, "/cwd");
+  assert.deepEqual(req.suggestions, []);
+});
+
+test("toSdkPermissionResult: allow carries updatedPermissions", () => {
+  assert.deepEqual(toSdkPermissionResult({ behavior: "allow" }), { behavior: "allow", updatedPermissions: undefined });
+  assert.deepEqual(
+    toSdkPermissionResult({ behavior: "allow", updatedPermissions: [{ type: "addRules", rules: [], behavior: "allow", destination: "session" }] }),
+    { behavior: "allow", updatedPermissions: [{ type: "addRules", rules: [], behavior: "allow", destination: "session" }] },
+  );
+});
+
+test("toSdkPermissionResult: deny carries message", () => {
+  assert.deepEqual(toSdkPermissionResult({ behavior: "deny", message: "no" }), { behavior: "deny", message: "no" });
 });
 
 test("mapContentBlockDelta: sequences thinking then text across multiple deltas", () => {

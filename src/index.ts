@@ -3,6 +3,7 @@ import { Store } from "./store/db.js";
 import { Registry } from "./registry/registry.js";
 import { createBot } from "./bot/bot.js";
 import { BOT_COMMANDS } from "./bot/commands.js";
+import { approvalManager } from "./bot/approval.js";
 import { logger } from "./util/logger.js";
 import { createProxyAgent } from "./util/proxy.js";
 
@@ -22,6 +23,7 @@ async function main(): Promise<void> {
   }
 
   const store = new Store(config.dbPath);
+  approvalManager.init(store);
   const swept = store.sweepStaleRunning();
   if (swept) logger.warn({ swept }, "marked stale 'running' tasks as aborted (leftover from a crashed run)");
   const registry = new Registry(store);
@@ -56,7 +58,11 @@ async function main(): Promise<void> {
     shuttingDown = true;
     logger.info({ sig }, "shutting down");
     cronManager.stopAll();
-    await bot.stop();
+    try {
+      await bot.stop();
+    } catch {
+      // Ignore stop errors (e.g. 409 Conflict during tsx watch reload)
+    }
     store.close();
     process.exit(0);
   };
@@ -64,11 +70,23 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void stop("SIGTERM"));
 
   // Long-polling with a SEPARATE token — coexists with Hermes's Telegram platform.
-  await bot.start({
-    drop_pending_updates: false,
-    allowed_updates: ["message", "callback_query"],
-    timeout: config.telegram.pollTimeout,
-  });
+  const startPolling = async (retries = 3): Promise<void> => {
+    try {
+      await bot.start({
+        drop_pending_updates: false,
+        allowed_updates: ["message", "callback_query"],
+        timeout: config.telegram.pollTimeout,
+      });
+    } catch (err: unknown) {
+      if (retries > 0 && String(err).includes("409: Conflict")) {
+        logger.warn("Telegram 409 Conflict (previous bot instance disconnecting), retrying in 3s...");
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        return startPolling(retries - 1);
+      }
+      throw err;
+    }
+  };
+  await startPolling();
 }
 
 main().catch((err) => {

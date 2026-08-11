@@ -1,6 +1,6 @@
 import type { Api } from "grammy";
 import { logger } from "./logger.js";
-import { mdToTelegramHtml } from "./tgfmt.js";
+import { mdToTelegramHtml, sanitizeStreamMarkdown } from "./tgfmt.js";
 
 /**
  * Send a one-shot message using Telegram's native Rich Message renderer
@@ -11,7 +11,9 @@ import { mdToTelegramHtml } from "./tgfmt.js";
  * LaTeX, etc. For simple plain‑text status lines, `api.sendMessage` is fine.
  *
  * Unlike `TelegramStreamer`, this is a one-shot fire‑and‑forget call — no
- * progressive edits. It shares the same 3‑tier of the same fallback stack.
+ * progressive edits. It shares the same 3‑tier fallback stack, and applies the
+ * same `sanitizeStreamMarkdown` pass as the streamer so a Rich payload that
+ * contains an unbalanced fence or a partial link won't be rejected.
  */
 export async function sendRichText(
   api: Api,
@@ -22,13 +24,14 @@ export async function sendRichText(
 
   // 1. Rich Message (native markdown)
   try {
-    const m = await apiAny.sendRichMessage(chatId, { markdown: text });
+    const m = await apiAny.sendRichMessage(chatId, { markdown: sanitizeStreamMarkdown(text) });
     return m.message_id;
   } catch (err) {
     logger.debug({ err: String(err) }, "sendRichText: rich failed, falling to HTML");
   }
 
-  // 2. HTML parse mode
+  // 2. HTML parse mode — tables / LaTeX render as flattened, readable text so
+  //    no structural information is lost when Rich isn't available.
   try {
     const html = mdToTelegramHtml(text);
     const m = await api.sendMessage(chatId, html, {

@@ -5,6 +5,7 @@ import type { Store } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
 import { CronManager } from "../scheduler/cron.js";
 import { logger } from "../util/logger.js";
+import { approvalManager } from "./approval.js";
 import {
   handleStart,
   handleHelp,
@@ -29,6 +30,8 @@ import {
   handleSkills,
   handleSkillsPage,
   handleNewProjectClick,
+  handleApprove,
+  handleApproveModeCallback,
 } from "./commands.js";
 import { handlePhoto, handleDocument } from "./media.js";
 
@@ -85,9 +88,17 @@ export function createBot(
   bot.command("cron", (ctx) => handleCron(ctx, store, cron));
   bot.command("context", (ctx) => handleContext(ctx, registry));
   bot.command("skills", (ctx) => handleSkills(ctx));
+  bot.command("approve", (ctx) => handleApprove(ctx, store));
 
   // /skills pagination: prev/next buttons (skp:<page>).
   bot.callbackQuery(/^skp:/, (ctx) => handleSkillsPage(ctx));
+
+  // Inline-button approval decisions (appr:<shortId>:<action>).
+  bot.callbackQuery(/^appr:/, (ctx) => approvalManager.handleCallback(ctx));
+
+  // /approve mode toggle (approve:<auto|interactive>) — distinct prefix from
+  // the tool-approval `appr:` above so the two never collide.
+  bot.callbackQuery(/^approve:/, (ctx) => handleApproveModeCallback(ctx, store));
 
   // /projects "新建项目" button.
   bot.callbackQuery("newproj", (ctx) => handleNewProjectClick(ctx));
@@ -115,6 +126,7 @@ export function createBot(
   bot.hears("项目",   (ctx) => handleProjects(ctx, config, store));
   bot.hears("队列",   (ctx) => handleQueue(ctx, registry));
   bot.hears("任务",   (ctx) => handleTasks(ctx, store, registry));
+  bot.hears("审批",   (ctx) => handleApprove(ctx, store));
 
   bot.on("message:text", (ctx) => handleText(ctx, config, store, registry));
   // Photos and documents (screenshots / PDFs / text files) become multimodal prompts.

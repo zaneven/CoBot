@@ -125,6 +125,7 @@ export class CronManager {
       config: this.config,
       registry: this.registry,
       store: this.store,
+      origin: "cron",
       onSessionId: (id) => {
         this.store.setCronSessionId(jobId, id);
       },

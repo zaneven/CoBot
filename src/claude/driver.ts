@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { query, type Options, type SDKMessage, type SDKUserMessage, type ModelUsage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options, type SDKMessage, type SDKUserMessage, type ModelUsage, type PermissionResult, type PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import type { ContentBlockParam } from "@anthropic-ai/sdk/resources";
-import type { DriverEvent, RunParams, PromptInput, MediaAttachment } from "./types.js";
+import type { DriverEvent, RunParams, PromptInput, MediaAttachment, PermissionRequest, PermissionDecision } from "./types.js";
 import { logger } from "../util/logger.js";
 
 /**
@@ -51,23 +51,37 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
   // as "no results during execution" and, if the turn then hangs, as silence.
   options.includePartialMessages = true;
 
-  // A headless bot can't answer interactive permission prompts: in acceptEdits
-  // mode a non-edit tool (e.g. Bash) blocks on a can_use_tool request that
-  // nobody answers, hanging the turn until the watchdog kills it. Auto-approve
-  // tool use so tasks actually complete. (bypassPermissions already skips every
-  // check, so don't also set canUseTool there - it'd be dead and risks an SDK
-  // config conflict.) This is an explicit, user-chosen policy for a personal bot
-  // on whitelisted dirs - Claude can run any tool in the bound cwd.
+  // Tool-use permission: either delegate to an interactive handler (bot layer)
+  // or headless auto-approve. bypassPermissions already skips every check, so
+  // don't set canUseTool there — it'd be dead and risks an SDK config conflict.
+  // NEVER return null from canUseTool: that sends no control_response and the
+  // tool blocks forever (permission prompts have no park deadline).
   if (params.permissionMode !== "bypassPermissions") {
-    options.canUseTool = async (toolName) => {
-      logger.debug({ toolName }, "canUseTool: auto-approved");
-      return { behavior: "allow" as const };
-    };
+    if (params.canUseToolHandler) {
+      const handler = params.canUseToolHandler;
+      options.canUseTool = async (toolName, input, opts) => {
+        const req = buildPermissionRequest(toolName, input, opts, params.cwd);
+        const dec = await handler(req, opts.signal);
+        return toSdkPermissionResult(dec);
+      };
+    } else {
+      options.canUseTool = async (toolName) => {
+        logger.debug({ toolName }, "canUseTool: auto-approved");
+        return { behavior: "allow" as const };
+      };
+    }
   }
 
   let sawStreamEvent = false;
   let done = false;
   let timedOut = false;
+  // Round tracking: one agentic turn = one "round" of thinking. Text/thinking
+  // deltas arrive *before* the `assistant` message that closes the turn, so we
+  // can't know a new round started until its first delta shows up. We open a
+  // round on the first delta overall, and on the first delta *after* a tool-using
+  // turn (signalled by `pendingNewRound`, set when a tool_use block is seen).
+  let roundActive = false;
+  let pendingNewRound = false;
   // tool_use_id -> tool name, so tool_result blocks can be labelled with the
   // tool that produced them.
   const toolNames = new Map<string, string>();
@@ -91,6 +105,15 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
           if (ev.type !== "content_block_delta" || !ev.delta) break;
           const mapped = mapContentBlockDelta(ev.delta);
           if (!mapped) break;
+          // Open a new round on the first delta of a turn (overall, or after a
+          // tool-using turn). This fires before the delta itself so the bot
+          // layer can attach a fresh message header to the upcoming text.
+          if (mapped.kind === "text" || mapped.kind === "thinking") {
+            const r = shouldStartRound({ roundActive, pendingNewRound }, mapped.kind);
+            if (r.start) yield { kind: "roundStart" };
+            roundActive = r.roundActive;
+            pendingNewRound = r.pendingNewRound;
+          }
           if (mapped.kind === "text") sawStreamEvent = true;
           yield mapped;
           break;
@@ -100,11 +123,19 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
             .message.content;
           for (const block of content) {
             if (block.type === "text" && block.text && !sawStreamEvent) {
+              const r = shouldStartRound({ roundActive, pendingNewRound }, "text");
+              if (r.start) yield { kind: "roundStart" };
+              roundActive = r.roundActive;
+              pendingNewRound = r.pendingNewRound;
               yield { kind: "text", delta: block.text };
             } else if (block.type === "tool_use") {
               const name = block.name ?? "tool";
               if (block.id) toolNames.set(block.id, name);
               yield { kind: "tool", name, summary: summarizeToolInput(block.input) };
+              // A tool was used → the next incoming delta starts a new round.
+              const r = shouldStartRound({ roundActive, pendingNewRound }, "tool");
+              roundActive = r.roundActive;
+              pendingNewRound = r.pendingNewRound;
             }
           }
           break;
@@ -190,6 +221,27 @@ export function buildSdkPrompt(input: PromptInput): string | AsyncIterable<SDKUs
 }
 
 /**
+ * Pure decision for "round" (agentic-turn) boundaries. Text/thinking deltas
+ * open a new round the first time overall, and again after a tool-using turn
+ * (signalled by `pendingNewRound`); a tool_use block sets `pendingNewRound` so
+ * the *next* delta starts the following round. Extracted so the boundary logic
+ * is unit-testable without mocking the Claude Agent SDK.
+ */
+export function shouldStartRound(
+  state: { roundActive: boolean; pendingNewRound: boolean },
+  kind: "text" | "thinking" | "tool",
+): { start: boolean; roundActive: boolean; pendingNewRound: boolean } {
+  if (kind === "text" || kind === "thinking") {
+    if (state.pendingNewRound || !state.roundActive) {
+      return { start: true, roundActive: true, pendingNewRound: false };
+    }
+    return { start: false, roundActive: state.roundActive, pendingNewRound: state.pendingNewRound };
+  }
+  // tool_use seen in an assistant message
+  return { start: false, roundActive: state.roundActive, pendingNewRound: true };
+}
+
+/**
  * Map a single SDK `content_block_delta` into a {@link DriverEvent}, or return
  * null when the delta carries no renderable text (e.g. `signature_delta`).
  *
@@ -209,6 +261,41 @@ export function mapContentBlockDelta(
     return { kind: "thinking", delta: delta.thinking };
   }
   return null;
+}
+
+/** Build a bot-layer {@link PermissionRequest} from the SDK's canUseTool args. */
+export function buildPermissionRequest(
+  toolName: string,
+  input: Record<string, unknown>,
+  opts: {
+    requestId: string;
+    toolUseID: string;
+    title?: string;
+    displayName?: string;
+    description?: string;
+    suggestions?: PermissionUpdate[];
+  },
+  cwd: string,
+): PermissionRequest {
+  return {
+    requestId: opts.requestId,
+    toolUseID: opts.toolUseID,
+    toolName,
+    input,
+    title: opts.title,
+    displayName: opts.displayName,
+    description: opts.description,
+    suggestions: opts.suggestions,
+    cwd,
+  };
+}
+
+/** Map a bot-layer {@link PermissionDecision} to the SDK's PermissionResult. */
+export function toSdkPermissionResult(dec: PermissionDecision): PermissionResult {
+  if (dec.behavior === "allow") {
+    return { behavior: "allow", updatedPermissions: dec.updatedPermissions as PermissionUpdate[] | undefined };
+  }
+  return { behavior: "deny", message: dec.message };
 }
 
 async function* toUserMessages(input: PromptInput): AsyncGenerator<SDKUserMessage> {

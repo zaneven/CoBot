@@ -9,9 +9,14 @@ export interface Binding {
   projectPath: string;
   /** Active Claude Code session UUID for this chat (null = fresh next run). */
   sessionId: string | null;
+  /** Per-chat tool-approval mode (null = use config default). */
+  approvalMode: ApprovalMode | null;
   createdAt: number;
   updatedAt: number;
 }
+
+/** Tool-approval mode for a chat. Phase 1 supports auto + interactive. */
+export type ApprovalMode = "auto" | "interactive";
 
 export interface RunningTask {
   id: string;
@@ -36,11 +41,30 @@ export interface CronJob {
   lastRunAt: number | null;
 }
 
+/** Immutable record of one Claude Code task, for audit and cost accounting. */
+export interface AuditLog {
+  id: string;
+  chatId: number;
+  sessionId: string | null;
+  prompt: string;
+  /** JSON-encoded array of distinct tool names used during the task. */
+  tools: string;
+  status: "done" | "aborted" | "error";
+  costUsd: number | null;
+  durationMs: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  contextUsagePct: number | null;
+  startedAt: number;
+  endedAt: number | null;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS bindings (
   chat_id    INTEGER PRIMARY KEY,
   project_path TEXT NOT NULL,
   session_id TEXT,
+  approval_mode TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -67,7 +91,40 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_running_chat ON running_tasks(chat_id);
 CREATE INDEX IF NOT EXISTS idx_cron_chat ON cron_jobs(chat_id);
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id           TEXT PRIMARY KEY,
+  chat_id      INTEGER NOT NULL,
+  session_id   TEXT,
+  prompt       TEXT NOT NULL,
+  tools        TEXT NOT NULL DEFAULT '[]',
+  status       TEXT NOT NULL,
+  cost_usd     REAL,
+  duration_ms  REAL,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  context_usage_pct REAL,
+  started_at   INTEGER NOT NULL,
+  ended_at     INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_audit_chat ON audit_logs(chat_id, started_at);
+CREATE TABLE IF NOT EXISTS approval_rules (
+  chat_id    INTEGER NOT NULL,
+  tool_name  TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (chat_id, tool_name)
+);
+CREATE INDEX IF NOT EXISTS idx_approval_chat ON approval_rules(chat_id);
 `;
+
+/** Add columns introduced after the initial schema, idempotently. Older DB
+ *  files won't have `bindings.approval_mode` since CREATE TABLE IF NOT EXISTS
+ *  doesn't extend existing tables. */
+function migrate(db: DB): void {
+  const cols = db.prepare("PRAGMA table_info(bindings)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "approval_mode")) {
+    db.exec("ALTER TABLE bindings ADD COLUMN approval_mode TEXT");
+  }
+}
 
 export class Store {
   private db: DB;
@@ -77,21 +134,23 @@ export class Store {
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.db.exec(SCHEMA);
+    migrate(this.db);
     logger.debug({ dbPath }, "store initialized");
   }
 
   // ---- bindings ----
   getBinding(chatId: number): Binding | undefined {
     const r = this.db
-      .prepare("SELECT chat_id, project_path, session_id, created_at, updated_at FROM bindings WHERE chat_id = ?")
+      .prepare("SELECT chat_id, project_path, session_id, approval_mode, created_at, updated_at FROM bindings WHERE chat_id = ?")
       .get(chatId) as
-      | { chat_id: number; project_path: string; session_id: string | null; created_at: number; updated_at: number }
+      | { chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; created_at: number; updated_at: number }
       | undefined;
     if (!r) return undefined;
     return {
       chatId: r.chat_id,
       projectPath: r.project_path,
       sessionId: r.session_id,
+      approvalMode: (r.approval_mode as ApprovalMode | null) ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
@@ -111,6 +170,11 @@ export class Store {
 
   setSessionId(chatId: number, sessionId: string | null): void {
     this.db.prepare("UPDATE bindings SET session_id = ?, updated_at = ? WHERE chat_id = ?").run(sessionId, Date.now(), chatId);
+  }
+
+  /** Set the per-chat tool-approval mode. The binding must already exist. */
+  setApprovalMode(chatId: number, mode: ApprovalMode): void {
+    this.db.prepare("UPDATE bindings SET approval_mode = ?, updated_at = ? WHERE chat_id = ?").run(mode, Date.now(), chatId);
   }
 
   clearBinding(chatId: number): void {
@@ -236,6 +300,103 @@ export class Store {
     const res = this.db
       .prepare("UPDATE running_tasks SET status = 'aborted', ended_at = ? WHERE status = 'running'")
       .run(Date.now());
+    return res.changes;
+  }
+
+  // ---- audit log ----
+
+  insertAudit(log: AuditLog): void {
+    this.db
+      .prepare(
+        `INSERT INTO audit_logs
+           (id, chat_id, session_id, prompt, tools, status, cost_usd, duration_ms, input_tokens, output_tokens, context_usage_pct, started_at, ended_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        log.id,
+        log.chatId,
+        log.sessionId,
+        log.prompt,
+        log.tools,
+        log.status,
+        log.costUsd,
+        log.durationMs,
+        log.inputTokens,
+        log.outputTokens,
+        log.contextUsagePct,
+        log.startedAt,
+        log.endedAt,
+      );
+  }
+
+  /** Total spend (USD) for a chat since `sinceTs` (e.g. start of day). */
+  sumCostSince(chatId: number, sinceTs: number): number {
+    const r = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(cost_usd), 0) AS s FROM audit_logs WHERE chat_id = ? AND started_at >= ? AND cost_usd IS NOT NULL",
+      )
+      .get(chatId, sinceTs) as { s: number };
+    return r.s;
+  }
+
+  /** Total tokens (input + output) for a chat since `sinceTs`. */
+  sumTokensSince(chatId: number, sinceTs: number): number {
+    const r = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS s FROM audit_logs WHERE chat_id = ? AND started_at >= ? AND input_tokens IS NOT NULL",
+      )
+      .get(chatId, sinceTs) as { s: number };
+    return r.s;
+  }
+
+  listAudit(chatId: number, limit = 20): AuditLog[] {
+    const rows = this.db
+      .prepare("SELECT * FROM audit_logs WHERE chat_id = ? ORDER BY started_at DESC LIMIT ?")
+      .all(chatId, limit) as Record<string, unknown>[];
+    return rows.map((r) => ({
+      id: r.id as string,
+      chatId: r.chat_id as number,
+      sessionId: (r.session_id as string | null) ?? null,
+      prompt: r.prompt as string,
+      tools: (r.tools as string) ?? "[]",
+      status: r.status as AuditLog["status"],
+      costUsd: (r.cost_usd as number | null) ?? null,
+      durationMs: (r.duration_ms as number | null) ?? null,
+      inputTokens: (r.input_tokens as number | null) ?? null,
+      outputTokens: (r.output_tokens as number | null) ?? null,
+      contextUsagePct: (r.context_usage_pct as number | null) ?? null,
+      startedAt: r.started_at as number,
+      endedAt: (r.ended_at as number | null) ?? null,
+    }));
+  }
+
+  // ---- approval rules (long-term "always allow") ----
+
+  isAlwaysAllowed(chatId: number, toolName: string): boolean {
+    return !!this.db
+      .prepare("SELECT 1 FROM approval_rules WHERE chat_id = ? AND tool_name = ?")
+      .get(chatId, toolName);
+  }
+
+  addAlwaysAllow(chatId: number, toolName: string): void {
+    this.db
+      .prepare("INSERT OR IGNORE INTO approval_rules (chat_id, tool_name, created_at) VALUES (?, ?, ?)")
+      .run(chatId, toolName, Date.now());
+  }
+
+  listAlwaysAllow(chatId: number): string[] {
+    const rows = this.db
+      .prepare("SELECT tool_name FROM approval_rules WHERE chat_id = ? ORDER BY created_at")
+      .all(chatId) as { tool_name: string }[];
+    return rows.map((r) => r.tool_name);
+  }
+
+  /** Remove one rule (toolName set) or all rules for the chat (toolName omitted).
+   *  Returns the number of rows deleted. */
+  clearAlwaysAllow(chatId: number, toolName?: string): number {
+    const res = toolName
+      ? this.db.prepare("DELETE FROM approval_rules WHERE chat_id = ? AND tool_name = ?").run(chatId, toolName)
+      : this.db.prepare("DELETE FROM approval_rules WHERE chat_id = ?").run(chatId);
     return res.changes;
   }
 }

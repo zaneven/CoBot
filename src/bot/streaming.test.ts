@@ -88,6 +88,42 @@ test("auto-flush when buffer exceeds maxEditChars", async () => {
   assert.ok(api.sent.length >= 1);
 });
 
+test("summary appends a distinct block to the streamed message", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  await streamer.text("这里是回答正文。");
+  await streamer.summary("**▌执行摘要**  ·  ⏱️ 思考 1分30秒  ·  🔧 调用 3 个工具（Bash ×2, Read ×1）");
+  await streamer.finalize();
+  assert.equal(api.richSent.length, 1, "summary stays attached to the same message");
+  const out = api.richSent[0].rich_message.markdown;
+  assert.ok(out.includes("这里是回答正文。"), "body preserved");
+  assert.ok(out.includes("执行摘要"), "summary block present");
+  assert.ok(out.includes("⏱️ 思考 1分30秒"), "duration present");
+  // Summary must be separated from the body by a blank line, not glued on.
+  assert.ok(out.includes("回答正文。\n\n**▌执行摘要"), "blank-line separation between body and summary");
+});
+
+test("summary after finalize is a no-op", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  await streamer.text("body");
+  await streamer.finalize();
+  await streamer.summary("**▌执行摘要**  ·  x");
+  assert.equal(api.richSent.length, 1);
+  assert.ok(!api.richSent[0].rich_message.markdown.includes("执行摘要"), "no summary after finalize");
+});
+
+test("thinkingFragment appends to the body like text", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  streamer.setHeader("⏱️ 思考 中");
+  await streamer.thinkingFragment("我在分析需求…");
+  await streamer.finalize();
+  const out = api.richSent[0].rich_message.markdown;
+  assert.ok(out.startsWith("⏱️ 思考 中"), "header at top");
+  assert.ok(out.includes("我在分析需求…"), "thinking fragment preserved in body");
+});
+
 // ── tool markers ─────────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
 
 test("toolBlock appends escaped marker line", async () => {
@@ -106,6 +142,33 @@ test("toolResult appends escaped summary", async () => {
   await streamer.toolResult("grep", "found 3 matches", false);
   await streamer.flush();
   assert.ok(api.sent[0].text.includes("found 3 matches"));
+});
+
+// ── header (round meta line) ─────────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
+test("setHeader renders above the body, separated by a blank line", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  streamer.setHeader("⏱️ 思考 中 · 🔧 调用 2 个工具（Bash ×2）");
+  await streamer.text("这是本轮的回复正文。");
+  await streamer.finalize();
+  assert.equal(api.richSent.length, 1, "header + body are one message");
+  const out = api.richSent[0].rich_message.markdown;
+  assert.ok(out.startsWith("⏱️ 思考 中 · 🔧 调用 2 个工具（Bash ×2）"), "header at top");
+  assert.ok(out.includes("本轮的回复正文"), "body preserved");
+  assert.ok(out.includes("（Bash ×2）\n\n这是本轮"), "blank-line gap between header and body");
+});
+
+test("setHeader can update the meta line before finalize", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  streamer.setHeader("⏱️ 思考 中");
+  await streamer.text("正文");
+  streamer.setHeader("⏱️ 思考 1分30秒 · 🔧 调用 1 个工具（Read ×1）");
+  await streamer.finalize();
+  const out = api.richSent[0].rich_message.markdown;
+  assert.ok(out.includes("⏱️ 思考 1分30秒"), "updated duration shown");
+  assert.ok(out.includes("Read ×1"), "updated tool count shown");
+  assert.ok(!out.includes("思考 中"), "stale placeholder gone");
 });
 
 test("error toolResult includes warning marker", async () => {

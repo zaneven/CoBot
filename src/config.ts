@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import dotenv from "dotenv";
 import { parse as parseYaml } from "yaml";
 import { logger } from "./util/logger.js";
+import type { ApprovalMode } from "./store/db.js";
 
 dotenv.config();
 
@@ -11,6 +12,23 @@ export interface HermesConfig {
   apiUrl?: string;
   apiKey?: string;
 }
+
+/** Interactive tool-approval configuration. */
+export interface ApprovalConfig {
+  /** "auto" = headless auto-approve (default); "interactive" = prompt for
+   *  mutating tools (read-only tools in `skipTools` are still auto-allowed). */
+  mode: ApprovalMode;
+  /** Tool names that never require a prompt (read-only by default). */
+  skipTools: string[];
+  /** Per-request approval timeout (ms). Must be < taskTimeoutMs. */
+  timeoutMs: number;
+  /** Decision when the user doesn't respond in time. Default "allow"
+   *  (approve when present, auto-run when away). Set "deny" to fail closed. */
+  timeoutAction: "allow" | "deny";
+}
+
+/** Default read-only tools that skip the approval prompt. */
+export const DEFAULT_APPROVAL_SKIP_TOOLS = ["Read", "LS", "Glob", "Grep", "TodoWrite"];
 
 export interface Config {
   telegramToken: string;
@@ -23,8 +41,16 @@ export interface Config {
     /** Hard per-task wall-clock timeout in ms (prevents a hung task from blocking the chat). */
     taskTimeoutMs: number;
     /** Cap on agentic turns per task. Bounds a runaway tool loop so it can't
-     *  run all the way to the wall-clock watchdog. Undefined = SDK default. */
+     *  run all the way to the wall-clock watchdog. Falls back to
+     *  DEFAULT_MAX_TURNS when neither env nor yaml sets a value. */
     maxTurns?: number;
+    /** Per-day spend ceiling per chat (USD). When exceeded, new tasks are
+     *  rejected with a notice. Undefined = no cap. */
+    dailyCostCapUsd?: number;
+    /** Per-day token ceiling per chat (input + output). Undefined = no cap. */
+    dailyTokenCap?: number;
+    /** Interactive tool-approval settings. Omit to keep headless auto-approve. */
+    approval?: ApprovalConfig;
   };
   dbPath: string;
   projects: string[];
@@ -46,9 +72,10 @@ export interface Config {
 interface YamlConfig {
   projects?: string[];
   devRoots?: string[];
-  defaults?: { model?: string; maxTurns?: number };
+  defaults?: { model?: string; maxTurns?: number; dailyCostCapUsd?: number; dailyTokenCap?: number };
   telegram?: { maxEditChars?: number; pollTimeout?: number; flushMs?: number; showToolCalls?: boolean };
   hermes?: { enabled?: boolean; apiUrl?: string; apiKey?: string };
+  approval?: { mode?: ApprovalMode; skipTools?: string[]; timeoutMs?: number; timeoutAction?: "allow" | "deny" };
 }
 
 function loadYaml(path: string): YamlConfig {
@@ -67,9 +94,28 @@ function envList(name: string): string[] | undefined {
   return v.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+/** Parse an optional numeric env var (e.g. a cost/token cap). Returns undefined
+ *  when unset or non-numeric so yaml defaults can take over. */
+function envNum(name: string): number | undefined {
+  const v = process.env[name];
+  if (v === undefined || v.trim() === "") return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Parse an optional non-empty string env var. */
+function envStr(name: string): string | undefined {
+  const v = process.env[name];
+  return v && v.trim() !== "" ? v.trim() : undefined;
+}
+
 /** Coerce a maxTurns value to a positive int, else undefined (SDK default).
  *  Capped at 200 to bound runaway tool loops even if misconfigured. */
 export const MAX_TURNS = 200;
+/** Conservative default per-task turn cap, applied when neither env nor yaml
+ *  configures maxTurns. Bounds runaway tool loops before the wall-clock
+ *  watchdog even fires. Set CLAUDE_MAX_TURNS / defaults.maxTurns to override. */
+export const DEFAULT_MAX_TURNS = 50;
 export function clampTurns(v: number | undefined): number | undefined {
   if (!v || !Number.isFinite(v) || v <= 0) return undefined;
   const capped = Math.min(Math.floor(v), MAX_TURNS);
@@ -114,6 +160,25 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
     apiKey: yaml.hermes?.apiKey === "${HERMES_API_KEY}" ? apiKey : (yaml.hermes?.apiKey ?? apiKey),
   };
 
+  const taskTimeoutMs = Number(process.env.CLAUDE_TASK_TIMEOUT_MS ?? 10 * 60 * 1000);
+  // Approval timeout must be strictly less than the task watchdog, otherwise the
+  // watchdog kills the task mid-prompt. Clamp with a 30s safety margin.
+  const approvalTimeoutMs = (() => {
+    const raw = envNum("COBOT_APPROVAL_TIMEOUT_MS") ?? yaml.approval?.timeoutMs ?? 5 * 60 * 1000;
+    const max = taskTimeoutMs - 30_000;
+    if (raw >= max) {
+      logger.warn({ raw, max }, "approval.timeoutMs >= taskTimeoutMs; clamped");
+      return Math.max(60_000, max);
+    }
+    return raw;
+  })();
+  const approval: ApprovalConfig = {
+    mode: (envStr("COBOT_APPROVAL_MODE") ?? yaml.approval?.mode ?? "auto") as ApprovalMode,
+    skipTools: envList("COBOT_APPROVAL_SKIP_TOOLS") ?? yaml.approval?.skipTools ?? DEFAULT_APPROVAL_SKIP_TOOLS,
+    timeoutMs: approvalTimeoutMs,
+    timeoutAction: (envStr("COBOT_APPROVAL_TIMEOUT_ACTION") ?? yaml.approval?.timeoutAction ?? "allow") as "allow" | "deny",
+  };
+
   return {
     telegramToken: token,
     allowedUsers,
@@ -122,8 +187,15 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
       permissionMode,
       allowedTools: envList("CLAUDE_ALLOWED_TOOLS"),
       allowDangerousSkip,
-      taskTimeoutMs: Number(process.env.CLAUDE_TASK_TIMEOUT_MS ?? 10 * 60 * 1000),
-      maxTurns: clampTurns(process.env.CLAUDE_MAX_TURNS ? Number(process.env.CLAUDE_MAX_TURNS) : yaml.defaults?.maxTurns),
+      taskTimeoutMs,
+      maxTurns: clampTurns(
+        process.env.CLAUDE_MAX_TURNS
+          ? Number(process.env.CLAUDE_MAX_TURNS)
+          : (yaml.defaults?.maxTurns ?? DEFAULT_MAX_TURNS),
+      ),
+      dailyCostCapUsd: envNum("COBOT_DAILY_COST_CAP_USD") ?? yaml.defaults?.dailyCostCapUsd,
+      dailyTokenCap: envNum("COBOT_DAILY_TOKEN_CAP") ?? yaml.defaults?.dailyTokenCap,
+      approval,
     },
     dbPath: process.env.COBOT_DB_PATH ?? resolve(process.cwd(), "data/cobot.db"),
     projects: (yaml.projects ?? []).map((p) => resolve(p)),

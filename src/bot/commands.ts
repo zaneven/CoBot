@@ -3,7 +3,7 @@ import { mkdirSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import type { Config } from "../config.js";
 import { isPathAllowed, listDevProjects, type DevProject } from "../config.js";
-import type { Store } from "../store/db.js";
+import type { Store, ApprovalMode } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
 import type { CronManager } from "../scheduler/cron.js";
 import { listProjectSessions, listAllSessions, findSession } from "../claude/sessions.js";
@@ -34,6 +34,7 @@ export const BOT_COMMANDS: readonly BotCommandDef[] = [
   { command: "cron", usage: "/cron <5-field cron> | <prompt>", description: "schedule a task" },
   { command: "context", usage: "/context", description: "last turn's context window usage"},
   { command: "skills", usage: "/skills", description: "browse and select skills" },
+  { command: "approve", usage: "/approve auto|interactive", description: "tool-call approval mode" },
   { command: "help", usage: "/help", description: "show this help" },
 ];
 
@@ -83,6 +84,7 @@ function buildActionKeyboard(): Keyboard {
   return Keyboard.from([
     ["项目", "会话", "新建"],
     ["停止", "队列", "任务"],
+    ["审批"],
   ]).resized();
 }
 
@@ -717,4 +719,116 @@ export async function handleAuto(ctx: Context, config: Config, store: Store, reg
   await ctx.reply(`🤖 Auto mode ON — session stays live.\nProject: ${b.projectPath}\nSend a message to start.`, {
     reply_markup: buildActionKeyboard(),
   });
+}
+
+/**
+ * /approve [auto|interactive|list|clear <tool|all>]
+ *
+ * Tool-call approval mode for this chat. "interactive" prompts before mutating
+ * tools (read-only tools skip the prompt); "auto" headless-approves everything.
+ * "always allow" rules (set via the ⭐ button) persist in SQLite and are listed
+ * here. Mode persists on the binding.
+ *
+ * With no argument (or `list`) the command renders an inline keyboard showing
+ * the current mode — tap a button to switch (see `handleApproveModeCallback`).
+ */
+export async function handleApprove(ctx: Context, store: Store): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const arg = (typeof ctx.match === "string" ? ctx.match.trim().toLowerCase() : "");
+
+  // No arg / "list" → show current mode + a toggle keyboard.
+  if (arg === "" || arg === "list") {
+    const b = store.getBinding(chatId);
+    const mode = b?.approvalMode ?? "auto";
+    const rules = store.listAlwaysAllow(chatId);
+    await ctx.reply(approvalStatusText(mode, rules), { reply_markup: renderApprovalKeyboard(mode) });
+    return;
+  }
+
+  const b = store.getBinding(chatId);
+  if (!b) {
+    await ctx.reply("先选择项目: /projects");
+    return;
+  }
+
+  if (arg === "auto" || arg === "interactive") {
+    store.setApprovalMode(chatId, arg);
+    const rules = store.listAlwaysAllow(chatId);
+    await ctx.reply(approvalStatusText(arg, rules), { reply_markup: renderApprovalKeyboard(arg) });
+    return;
+  }
+
+  if (arg === "clear" || arg.startsWith("clear ")) {
+    const tool = arg === "clear" ? "all" : arg.slice("clear ".length).trim();
+    if (tool === "all") {
+      const n = store.clearAlwaysAllow(chatId);
+      await ctx.reply(`🧹 清除 ${n} 条始终允许规则`);
+    } else if (tool) {
+      const n = store.clearAlwaysAllow(chatId, tool);
+      await ctx.reply(n ? `🧹 移除 ${tool}` : `${tool} 不在列表中`);
+    }
+    return;
+  }
+
+  await ctx.reply("用法: /approve auto|interactive|list|clear <tool|all>");
+}
+
+/** Inline keyboard for /approve: shows the current mode (highlighted with ✅)
+ *  and two buttons that switch between auto and interactive. Callback data is
+ *  `approve:<target>` — deliberately distinct from the `appr:` tool-approval
+ *  prefix so the two never collide. */
+export function renderApprovalKeyboard(mode: ApprovalMode): InlineKeyboard {
+  const autoLbl = mode === "auto" ? "✅ 自动 (auto)" : "⚪ 自动 (auto)";
+  const intLbl = mode === "interactive" ? "✅ 手动 (interactive)" : "⚪ 手动 (interactive)";
+  return new InlineKeyboard().text(autoLbl, "approve:auto").row().text(intLbl, "approve:interactive");
+}
+
+function approvalModeBlurb(mode: ApprovalMode): string {
+  return mode === "auto"
+    ? "自动 (auto)：所有工具调用自动通过，无需确认"
+    : "手动 (interactive)：变更类工具会弹出审批请求，需你点击确认";
+}
+
+function approvalStatusText(mode: ApprovalMode, rules: string[]): string {
+  const rulesTxt = rules.length ? rules.map((t) => `• ${t}`).join("\n") : "(无)";
+  return (
+    `🔐 审批模式\n当前: ${mode === "auto" ? "自动" : "手动"}\n${approvalModeBlurb(mode)}` +
+    `\n\n始终允许的工具:\n${rulesTxt}`
+  );
+}
+
+/** Callback for inline `approve:<target>` buttons. Switches the chat's approval
+ *  mode and refreshes the keyboard (the new current mode is highlighted). Mode
+ *  persists on the binding, so a project must be bound first. */
+export async function handleApproveModeCallback(ctx: Context, store: Store): Promise<void> {
+  const data = ctx.callbackQuery?.data ?? "";
+  if (!data.startsWith("approve:")) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  const chatId = ctx.chat?.id;
+  if (!chatId) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  const target = data.slice("approve:".length);
+  if (target !== "auto" && target !== "interactive") {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  if (!store.getBinding(chatId)) {
+    await ctx.answerCallbackQuery({ text: "请先 /projects 选择项目" });
+    return;
+  }
+  store.setApprovalMode(chatId, target);
+  const rules = store.listAlwaysAllow(chatId);
+  try {
+    await ctx.editMessageText(approvalStatusText(target, rules), {
+      reply_markup: renderApprovalKeyboard(target),
+    });
+  } catch (err) {
+    logger.debug({ err: String(err) }, "approve mode edit failed");
+  }
+  await ctx.answerCallbackQuery({ text: `已切换为 ${target === "auto" ? "自动" : "手动"}` });
 }

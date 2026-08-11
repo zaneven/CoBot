@@ -4,6 +4,7 @@
  */
 export type DriverEvent =
   | { kind: "init"; sessionId: string; cwd: string; model: string }
+  | { kind: "roundStart" }
   | { kind: "text"; delta: string }
   | { kind: "thinking"; delta: string }
   | { kind: "tool"; name: string; summary: string }
@@ -38,6 +39,31 @@ export interface PromptInput {
   media?: MediaAttachment[];
 }
 
+/**
+ * A tool-use permission request forwarded from the SDK's `canUseTool` callback.
+ * The driver builds this from the SDK args so the bot layer never touches SDK
+ * types.
+ */
+export interface PermissionRequest {
+  /** SDK control_request id — idempotency key (the SDK may redeliver it). */
+  requestId: string;
+  toolUseID: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  /** Pre-rendered prompt text from the bridge (prefer over toolName+input). */
+  title?: string;
+  displayName?: string;
+  description?: string;
+  /** SDK "always allow" suggestions; opaque to the bot layer — passed through. */
+  suggestions?: unknown;
+  cwd: string;
+}
+
+/** A bot-layer decision returned to the driver for mapping to PermissionResult. */
+export type PermissionDecision =
+  | { behavior: "allow"; updatedPermissions?: unknown }
+  | { behavior: "deny"; message: string };
+
 export interface RunParams {
   prompt: PromptInput;
   cwd: string;
@@ -56,4 +82,7 @@ export interface RunParams {
   claudePath?: string;
   /** External abort signal (e.g. from /stop). */
   signal?: AbortSignal;
+  /** Interactive tool-approval handler. When set, `canUseTool` delegates to it
+   *  instead of auto-approving. Omit to keep headless auto-approve behavior. */
+  canUseToolHandler?: (req: PermissionRequest, signal: AbortSignal) => Promise<PermissionDecision>;
 }

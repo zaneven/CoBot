@@ -1,17 +1,24 @@
 import type { Api } from "grammy";
-import type { Config } from "../config.js";
-import type { Store } from "../store/db.js";
+import { type Config, DEFAULT_APPROVAL_SKIP_TOOLS } from "../config.js";
+import type { Store, AuditLog } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
-import type { PromptInput } from "../claude/types.js";
+import type { PromptInput, PermissionRequest, PermissionDecision } from "../claude/types.js";
 import { runClaude } from "../claude/driver.js";
 import { TelegramStreamer } from "./streaming.js";
 import { SilenceIndicator } from "./indicator.js";
 import { sendRichText } from "../util/send.js";
 import { logger } from "../util/logger.js";
+import { approvalManager } from "./approval.js";
 
 export interface RunOutcome {
   status: "done" | "aborted" | "error";
   sessionId?: string;
+  costUsd?: number;
+  durationMs?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  contextUsagePct?: number;
+  tools: string[];
 }
 
 /**
@@ -27,14 +34,34 @@ async function runTurn(opts: {
   prompt: PromptInput;
   config: Config;
   registry: Registry;
+  store: Store;
+  origin: "interactive" | "cron";
   abortSignal: AbortSignal;
   onSessionId?: (id: string) => void;
 }): Promise<RunOutcome> {
-  const { api, chatId, projectPath, sessionId, prompt, config, registry, abortSignal, onSessionId } = opts;
+  const { api, chatId, projectPath, sessionId, prompt, config, registry, store, origin, abortSignal, onSessionId } = opts;
 
-  const streamer = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
   const indicator = new SilenceIndicator(api, chatId);
   indicator.start();
+
+  // Interactive tool approval: only for interactive tasks (cron runs
+  // unattended → auto-approve) and only when the chat's mode is "interactive".
+  // Otherwise the driver falls back to headless auto-approve.
+  const approvalCfg = config.claude.approval;
+  const chatMode = store.getBinding(chatId)?.approvalMode ?? approvalCfg?.mode ?? "auto";
+  const installApproval = chatMode === "interactive" && origin !== "cron" && !!approvalCfg;
+  const canUseToolHandler = installApproval && approvalCfg
+    ? (req: PermissionRequest, sig: AbortSignal): Promise<PermissionDecision> =>
+        approvalManager.request(req, {
+          api,
+          chatId,
+          indicator,
+          mode: chatMode,
+          skipTools: new Set(approvalCfg.skipTools),
+          timeoutMs: approvalCfg.timeoutMs,
+          timeoutAction: approvalCfg.timeoutAction,
+        }, sig)
+    : undefined;
 
   // Telegram's "typing…" indicator expires after ~5 s; refresh a little sooner.
   // Fire once immediately then every 4.5 s. Non-critical — errors are swallowed.
@@ -48,6 +75,34 @@ async function runTurn(opts: {
   let driverAborted = false;
   let abortedReason: "timeout" | "user" | undefined;
   let capturedSessionId: string | undefined;
+  const toolsUsed: string[] = [];
+  let capturedCostUsd: number | undefined;
+  let capturedDurationMs: number | undefined;
+  let capturedInputTokens: number | undefined;
+  let capturedOutputTokens: number | undefined;
+  let capturedContextUsagePct: number | undefined;
+
+  // ── Multi-message structure (Claude-Code-style) ──────────────────────────
+  // ① Each agentic "round" becomes its own Telegram message: a header line
+  //   (how long it thought + what tools it called) above a short "thinking
+  //   fragment" (live reasoning, when the model emits it). It deliberately does
+  //   NOT contain the answer body, so nothing is duplicated.
+  // ② After the run we send the full clean answer — the only place the complete
+  //   body appears.
+  // ③ Then a done summary (token counts, cost, duration).
+  let currentRound: TelegramStreamer | null = null;
+  let roundStartMs = 0;
+  let roundToolCounts: Record<string, number> = {};
+  let fullText = ""; // accumulated answer text across all rounds (for ②)
+
+  /** Build the current round's top-of-message header. `durationMs` omitted while
+   *  the round is still streaming (shows "思考中"); pass it at finalize. */
+  function roundHeader(durationMs?: number): string {
+    const bits: string[] = [`⏱️ 思考 ${durationMs !== undefined ? fmtDuration(durationMs) : "中"}`];
+    const toolS = fmtToolSummary(roundToolCounts);
+    if (toolS) bits.push(toolS);
+    return bits.join(" · ");
+  }
 
   try {
     for await (const ev of runClaude({
@@ -62,6 +117,7 @@ async function runTurn(opts: {
       maxTurns: config.claude.maxTurns,
       signal: abortSignal,
       timeoutMs: config.claude.taskTimeoutMs,
+      canUseToolHandler,
     })) {
       switch (ev.kind) {
         case "init":
@@ -70,30 +126,61 @@ async function runTurn(opts: {
             onSessionId?.(ev.sessionId);
           }
           break;
+        case "roundStart":
+          // Close the previous round's message (set its final header) and open
+          // a fresh one for this round.
+          if (currentRound) {
+            currentRound.setHeader(roundHeader(Date.now() - roundStartMs));
+            await currentRound.finalize();
+          }
+          currentRound = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
+          roundStartMs = Date.now();
+          roundToolCounts = {};
+          currentRound.setHeader(roundHeader());
+          break;
         case "text":
           indicator.activity();
-          await streamer.text(ev.delta);
+          // ② owns the complete answer — accumulate for the final message only;
+          // do NOT stream into ① (that would duplicate the body).
+          fullText += ev.delta;
           break;
         case "thinking":
-          // Reasoning in progress - show a progress marker so a long think
-          // isn't silent. Don't append to the streamer (would pollute the
-          // answer); the indicator carries the signal and self-clears on text.
+          // ① shows the live reasoning as a "thinking fragment" under its
+          // header, so a long think isn't silent. The final answer body is
+          // delivered once, in ②, and never duplicated here.
           indicator.thinking();
+          if (currentRound) await currentRound.thinkingFragment(ev.delta);
           break;
         case "tool":
           indicator.activity();
-          if (config.telegram.showToolCalls) await streamer.toolLine(ev.name, ev.summary);
+          if (!toolsUsed.includes(ev.name)) toolsUsed.push(ev.name);
+          roundToolCounts[ev.name] = (roundToolCounts[ev.name] ?? 0) + 1;
+          // Live-update the round header with the running tool count.
+          if (currentRound) currentRound.setHeader(roundHeader());
+          if (config.telegram.showToolCalls && currentRound) {
+            await currentRound.toolLine(ev.name, ev.summary);
+          }
           break;
         case "toolResult":
           indicator.activity();
-          if (config.telegram.showToolCalls) await streamer.toolResult(ev.name, ev.content, ev.isError);
+          if (config.telegram.showToolCalls && currentRound) await currentRound.toolResult(ev.name, ev.content, ev.isError);
           break;
         case "status":
           if (ev.status === "compacting") indicator.compacting();
           else indicator.activity();
           break;
         case "done":
-          await streamer.finalize();
+          capturedCostUsd = ev.costUsd;
+          capturedDurationMs = ev.durationMs;
+          capturedInputTokens = ev.usage?.inputTokens;
+          capturedOutputTokens = ev.usage?.outputTokens;
+          capturedContextUsagePct = ev.contextUsagePct;
+          // Close the final round's message with its definitive header.
+          if (currentRound) {
+            currentRound.setHeader(roundHeader(Date.now() - roundStartMs));
+            await currentRound.finalize();
+            currentRound = null;
+          }
           if (ev.contextUsagePct !== undefined) {
             registry.setContextUsage(chatId, ev.contextUsagePct);
           }
@@ -111,6 +198,15 @@ async function runTurn(opts: {
               abortedReason === "timeout" ? ` (timed out after ${Math.round(config.claude.taskTimeoutMs / 60000)}m)` : "";
             await api.sendMessage(chatId, `⏹ Interrupted${reason}.`);
           } else {
+            // ② Complete, clean final answer (no per-round headers) as its own
+            //    message — the consolidated view of everything that was said.
+            const answer = fullText.trim() || ev.text.trim();
+            if (answer) {
+              const answerStreamer = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
+              await answerStreamer.text(answer);
+              await answerStreamer.finalize();
+            }
+            // ③ Done summary (original format: token counts included).
             const parts: string[] = ["✅ Done"];
             if (ev.usage) parts.push(`↑${fmtTokens(ev.usage.inputTokens)} ↓${fmtTokens(ev.usage.outputTokens)}`);
             if (ev.contextUsagePct !== undefined) parts.push(`📊 ${ev.contextUsagePct}%`);
@@ -121,7 +217,10 @@ async function runTurn(opts: {
           break;
         case "error":
           hadError = true;
-          await streamer.finalize();
+          if (currentRound) {
+            await currentRound.finalize();
+            currentRound = null;
+          }
           await sendRichText(api, chatId, `❌ ${ev.message}`);
           break;
       }
@@ -129,16 +228,28 @@ async function runTurn(opts: {
   } catch (err) {
     hadError = true;
     logger.error({ err: String(err) }, "runTurn error");
-    await streamer.finalize();
+    if (currentRound) {
+      await currentRound.finalize();
+      currentRound = null;
+    }
     await sendRichText(api, chatId, `❌ Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     clearInterval(typingTimer);
     await indicator.stop();
+    // Safety net: deny any approval prompt still open for this chat (e.g. the
+    // task aborted while waiting on a tap).
+    approvalManager.cancelForChat(chatId, api);
   }
 
   return {
     status: hadError ? "error" : (driverAborted || abortSignal.aborted) ? "aborted" : "done",
     sessionId: capturedSessionId,
+    costUsd: capturedCostUsd,
+    durationMs: capturedDurationMs,
+    inputTokens: capturedInputTokens,
+    outputTokens: capturedOutputTokens,
+    contextUsagePct: capturedContextUsagePct,
+    tools: toolsUsed,
   };
 }
 
@@ -152,6 +263,8 @@ interface RunOneOpts {
   config: Config;
   registry: Registry;
   store: Store;
+  /** "interactive" (default) enables approval prompts; "cron" forces auto-approve. */
+  origin?: "interactive" | "cron";
   onSessionId?: (id: string) => void;
 }
 
@@ -162,7 +275,16 @@ interface RunOneOpts {
  * interactive message could start a concurrent run.
  */
 export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
-  const { api, chatId, projectPath, sessionId, prompt, displayText, config, registry, store, onSessionId } = opts;
+  const { api, chatId, projectPath, sessionId, prompt, displayText, config, registry, store, origin, onSessionId } = opts;
+
+  // Guardrail: reject when the chat's daily spend/token quota is exhausted.
+  // Single choke point for interactive, queued, and cron tasks.
+  const quota = checkQuota(chatId, store, config);
+  if (!quota.ok) {
+    await api.sendMessage(chatId, `⚠️ ${quota.reason}`);
+    return { status: "aborted", sessionId: undefined, tools: [] };
+  }
+
   const run = registry.start(chatId, projectPath, sessionId, prompt, displayText);
   const outcome = await runTurn({
     api,
@@ -172,9 +294,29 @@ export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
     prompt,
     config,
     registry,
+    store,
+    origin: origin ?? "interactive",
     abortSignal: run.abortController.signal,
     onSessionId,
   });
+
+  // Audit: persist what ran, what it cost, and which tools it touched.
+  store.insertAudit({
+    id: run.taskId,
+    chatId,
+    sessionId: outcome.sessionId ?? null,
+    prompt: prompt.text,
+    tools: JSON.stringify(outcome.tools ?? []),
+    status: outcome.status,
+    costUsd: outcome.costUsd ?? null,
+    durationMs: outcome.durationMs ?? null,
+    inputTokens: outcome.inputTokens ?? null,
+    outputTokens: outcome.outputTokens ?? null,
+    contextUsagePct: outcome.contextUsagePct ?? null,
+    startedAt: run.startedAt,
+    endedAt: Date.now(),
+  });
+
   registry.finish(chatId, outcome.status === "aborted" ? "aborted" : outcome.status === "error" ? "error" : "done");
   // Drain the next queued prompt (fire-and-forget; runOne starts synchronously).
   drainQueued({ api, chatId, config, registry, store });
@@ -202,8 +344,66 @@ function drainQueued(opts: { api: Api; chatId: number; config: Config; registry:
     config,
     registry,
     store,
+    origin: "interactive",
     onSessionId: next.onSessionId,
   });
+}
+
+/**
+ * Reject a task when the chat has exhausted its per-day spend or token quota.
+ * Both caps are optional (undefined = no cap); the window resets at local
+ * midnight. Returns ok:true when no cap applies or usage is within bounds.
+ */
+function startOfToday(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+export function checkQuota(
+  chatId: number,
+  store: Store,
+  config: Config,
+): { ok: true } | { ok: false; reason: string } {
+  const costCap = config.claude.dailyCostCapUsd;
+  const tokenCap = config.claude.dailyTokenCap;
+  if (costCap === undefined && tokenCap === undefined) return { ok: true };
+  const since = startOfToday();
+  if (costCap !== undefined) {
+    const used = store.sumCostSince(chatId, since);
+    if (used >= costCap) {
+      return { ok: false, reason: `今日花费额度已用尽（$${used.toFixed(2)} / $${costCap.toFixed(2)}）。` };
+    }
+  }
+  if (tokenCap !== undefined) {
+    const used = store.sumTokensSince(chatId, since);
+    if (used >= tokenCap) {
+      return { ok: false, reason: `今日 Token 额度已用尽（${used} / ${tokenCap}）。` };
+    }
+  }
+  return { ok: true };
+}
+
+/** Format a millisecond duration as a compact Chinese string. */
+function fmtDuration(ms?: number): string {
+  if (ms === undefined || ms < 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}秒`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return rs ? `${m}分${rs}秒` : `${m}分`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm ? `${h}小时${rm}分` : `${h}小时`;
+}
+
+/** Format tool usage as a compact summary, e.g. "🔧 调用 3 个工具（Bash ×2, Read ×1）". */
+function fmtToolSummary(counts: Record<string, number>): string {
+  const entries = Object.entries(counts);
+  if (!entries.length) return "";
+  const total = entries.reduce((acc, [, c]) => acc + c, 0);
+  const detail = entries.map(([name, c]) => (c > 1 ? `${name} ×${c}` : name)).join(", ");
+  return `🔧 调用 ${total} 个工具（${detail}）`;
 }
 
 /** Format token counts: <1k raw, ≥1k as "1.2K". */
@@ -247,6 +447,7 @@ export function submitInteractive(opts: {
     config,
     registry,
     store,
+    origin: "interactive",
     onSessionId: (id) => store.setSessionId(chatId, id),
   });
 }

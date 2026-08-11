@@ -313,3 +313,53 @@ function parseTable(
 export function escapeMd(s: string): string {
   return s.replace(/[\\`*_~[\]!#]/g, (m) => "\\" + m);
 }
+
+/**
+ * Sanitise mid-stream markdown before sending to Telegram's Rich Message
+ * parser. Balances fenced code blocks and cleans trailing partial inline
+ * markdown so Telegram won't reject the payload or render broken content
+ * while the next flush is still building.
+ *
+ * Return the sanitised string — good-faith replacement that won't
+ * structurally break the message.
+ *
+ * Note: fence detection only triggers on a fence that occupies its own line
+ * (lines starting with ``` or ~~~, 3+ chars). Inline backtick pairs such as
+ * `` `code` `` are never mistaken for fences, so explanatory prose quoting a
+ * single backtick pair is left untouched.
+ */
+export function sanitizeStreamMarkdown(md: string): string {
+  let ret = md;
+
+  // ── balance fenced code blocks ──────────────────────────────────
+  let tickOpen = false;
+  let tildeOpen = false;
+  for (const line of ret.split("\n")) {
+    if (line.trimStart().startsWith("```")) tickOpen = !tickOpen;
+    else if (line.trimStart().startsWith("~~~")) tildeOpen = !tildeOpen;
+  }
+  if (tickOpen) ret += "\n```";
+  if (tildeOpen) ret += "\n~~~";
+
+  // ── receding broken constructs that paste partial markup ───────
+  // A trailing lone backtick without a matching close partner → escape it.
+  // Mid-stream buffers frequently contain an odd number of backticks; escape
+  // every unpaired trailing backtick, not just the last one, so code-block
+  // text that legitimately ends with a backtick isn't corrupted.
+  const ticks = ret.match(/`/g) ?? [];
+  if (ticks.length % 2 === 1) {
+    // Escape the final backtick (the unpaired one).
+    const idx = ret.lastIndexOf("`");
+    if (idx >= 0) ret = ret.slice(0, idx) + "\\`" + ret.slice(idx + 1);
+  }
+
+  // Trailing unclosed link `[...](url` → escape the bracket.
+  // Only if it looks mid-stream: no closing `)` after the `](`.
+  const link = ret.match(/\[([^\]]+)\]\(([^()]*)$/);
+  if (link && !ret.slice(ret.lastIndexOf("](") + 2).includes(")")) {
+    const idx = ret.lastIndexOf("](");
+    ret = ret.slice(0, idx) + "\\[\\" + ret.slice(idx);
+  }
+
+  return ret;
+}

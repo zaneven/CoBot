@@ -11,6 +11,8 @@ beforeEach(() => {
   (store as any).db.exec("DELETE FROM bindings");
   (store as any).db.exec("DELETE FROM running_tasks");
   (store as any).db.exec("DELETE FROM cron_jobs");
+  (store as any).db.exec("DELETE FROM audit_logs");
+  (store as any).db.exec("DELETE FROM approval_rules");
 });
 
 // ── bindings ──────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
@@ -195,4 +197,86 @@ test("setCronEnabled toggles enabled flag", () => {
   assert.equal(store.getCron("c1")!.enabled, 0);
   store.setCronEnabled("c1", 1);
   assert.equal(store.getCron("c1")!.enabled, 1);
+});
+
+// ── audit log ─────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
+
+test("insertAudit + listAudit round-trip and ordering", () => {
+  store.insertAudit({ id: "a1", chatId: 7, sessionId: "s1", prompt: "do thing",
+    tools: JSON.stringify(["Bash", "Read"]), status: "done", costUsd: 0.12, durationMs: 5000,
+    inputTokens: 1000, outputTokens: 2000, contextUsagePct: 12, startedAt: 100, endedAt: 105 });
+  store.insertAudit({ id: "a2", chatId: 7, sessionId: null, prompt: "another",
+    tools: JSON.stringify([]), status: "error", costUsd: null, durationMs: null,
+    inputTokens: null, outputTokens: null, contextUsagePct: null, startedAt: 200, endedAt: 201 });
+  const logs = store.listAudit(7);
+  assert.equal(logs.length, 2);
+  assert.equal(logs[0]!.id, "a2", "newest first");
+  assert.equal(logs[0]!.status, "error");
+  assert.equal(logs[1]!.id, "a1");
+  assert.equal(logs[1]!.costUsd, 0.12);
+  assert.deepEqual(JSON.parse(logs[1]!.tools), ["Bash", "Read"]);
+});
+
+test("sumCostSince and sumTokensSince respect the time window and chat", () => {
+  store.insertAudit({ id: "a1", chatId: 7, sessionId: null, prompt: "p",
+    tools: "[]", status: "done", costUsd: 1.5, durationMs: 1, inputTokens: 100, outputTokens: 50,
+    contextUsagePct: null, startedAt: 100, endedAt: 101 });
+  store.insertAudit({ id: "a2", chatId: 7, sessionId: null, prompt: "p",
+    tools: "[]", status: "done", costUsd: 2.5, durationMs: 1, inputTokens: 300, outputTokens: 250,
+    contextUsagePct: null, startedAt: 200, endedAt: 201 });
+  // A different chat must not be counted.
+  store.insertAudit({ id: "a3", chatId: 99, sessionId: null, prompt: "p",
+    tools: "[]", status: "done", costUsd: 99, durationMs: 1, inputTokens: 999, outputTokens: 999,
+    contextUsagePct: null, startedAt: 150, endedAt: 151 });
+
+  assert.equal(store.sumCostSince(7, 0), 4); // 1.5 + 2.5
+  assert.equal(store.sumCostSince(7, 150), 2.5); // only the later one
+  assert.equal(store.sumTokensSince(7, 0), 700); // 150 + 550
+});
+
+// ── approval mode + always-allow rules ──〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
+
+test("binding approvalMode defaults to null and round-trips", () => {
+  store.upsertBinding(1, "/p", null);
+  assert.equal(store.getBinding(1)!.approvalMode, null);
+  store.setApprovalMode(1, "interactive");
+  assert.equal(store.getBinding(1)!.approvalMode, "interactive");
+  store.setApprovalMode(1, "auto");
+  assert.equal(store.getBinding(1)!.approvalMode, "auto");
+});
+
+test("approvalMode survives an upsert (not wiped by binding updates)", () => {
+  store.upsertBinding(1, "/p", null);
+  store.setApprovalMode(1, "interactive");
+  store.upsertBinding(1, "/p2", "sess-1"); // e.g. /bind again
+  assert.equal(store.getBinding(1)!.approvalMode, "interactive");
+  assert.equal(store.getBinding(1)!.projectPath, "/p2");
+});
+
+test("always-allow rules: add / list / isAllowed / clear", () => {
+  store.upsertBinding(1, "/p", null);
+  assert.equal(store.isAlwaysAllowed(1, "Bash"), false);
+  store.addAlwaysAllow(1, "Bash");
+  store.addAlwaysAllow(1, "Write");
+  store.addAlwaysAllow(1, "Bash"); // idempotent
+  assert.equal(store.isAlwaysAllowed(1, "Bash"), true);
+  assert.equal(store.isAlwaysAllowed(1, "Read"), false);
+  assert.deepEqual(store.listAlwaysAllow(1), ["Bash", "Write"]);
+
+  // Remove one.
+  assert.equal(store.clearAlwaysAllow(1, "Bash"), 1);
+  assert.equal(store.isAlwaysAllowed(1, "Bash"), false);
+  assert.deepEqual(store.listAlwaysAllow(1), ["Write"]);
+
+  // Clear all for the chat.
+  assert.equal(store.clearAlwaysAllow(1), 1);
+  assert.deepEqual(store.listAlwaysAllow(1), []);
+});
+
+test("always-allow rules are scoped per chat", () => {
+  store.upsertBinding(1, "/p", null);
+  store.upsertBinding(2, "/q", null);
+  store.addAlwaysAllow(1, "Bash");
+  assert.equal(store.isAlwaysAllowed(2, "Bash"), false);
+  assert.equal(store.clearAlwaysAllow(2), 0, "chat 2 has no rules");
 });
