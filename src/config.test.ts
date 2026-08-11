@@ -39,3 +39,21 @@ test("loadConfig: parses botToken and allowedUsers directly from yaml", () => {
     if (existsSync(tmpPath)) unlinkSync(tmpPath);
   }
 });
+
+test("loadConfig: default admin config has host 127.0.0.1 and empty apiKey", () => {
+  const tmpPath = resolve(process.cwd(), "config.test.admin.yaml");
+  writeFileSync(
+    tmpPath,
+    "telegram:\n  botToken: 'yaml-token-123'\n  allowedUsers: [999111]\nadmin:\n  enabled: true\n",
+    "utf8",
+  );
+
+  try {
+    const config = loadConfig(tmpPath);
+    assert.equal(config.admin.host, "127.0.0.1");
+    assert.equal(config.admin.apiKey, "");
+  } finally {
+    if (existsSync(tmpPath)) unlinkSync(tmpPath);
+  }
+});
+

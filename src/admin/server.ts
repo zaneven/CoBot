@@ -491,12 +491,15 @@ export class AdminServer {
       }
 
       let bytesRead = 0;
+      let aborted = false;
       const chunks: Buffer[] = [];
       const MAX_BODY_SIZE = 1 * 1024 * 1024; // 1MB
 
       req.on("data", (chunk: Buffer) => {
+        if (aborted) return;
         bytesRead += chunk.length;
         if (bytesRead > MAX_BODY_SIZE) {
+          aborted = true;
           req.pause();
           reject(new HttpError(413, "Payload Too Large: Limit is 1MB"));
           return;
@@ -505,7 +508,7 @@ export class AdminServer {
       });
 
       req.on("end", () => {
-        if (bytesRead > MAX_BODY_SIZE) return;
+        if (aborted) return;
         const body = Buffer.concat(chunks).toString("utf8");
         if (!body || body.trim() === "") {
           resolve({} as T);
@@ -518,7 +521,9 @@ export class AdminServer {
         }
       });
 
-      req.on("error", (err) => reject(err));
+      req.on("error", (err) => {
+        if (!aborted) reject(err);
+      });
     });
   }
 

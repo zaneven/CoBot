@@ -41,5 +41,6 @@ defaults:
 # Built-in Web Admin Panel configuration
 admin:
   enabled: true          # true = start Web Admin HTTP server on startup
+  host: "127.0.0.1"      # HTTP listen host
   port: 8085             # HTTP listen port
-  apiKey: "cobot-admin-secret-key" # Secret key for Admin API bearer authentication
+  apiKey: ""             # Secret key for Admin API bearer authentication
