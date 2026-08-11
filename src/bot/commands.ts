@@ -19,6 +19,7 @@ export interface BotCommandDef {
 }
 
 export const BOT_COMMANDS: readonly BotCommandDef[] = [
+  { command: "start", usage: "/start", description: "show the welcome / command list" },
   { command: "projects", usage: "/projects", description: "list dev-root projects (tap to switch)" },
   { command: "project", usage: "/project <name>", description: "switch active project by name" },
   { command: "bind", usage: "/bind <path>", description: "bind to an explicit path" },
