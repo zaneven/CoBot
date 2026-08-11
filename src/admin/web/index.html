@@ -548,6 +548,33 @@
 
     <!-- Logs Tab -->
     <div id="logs" class="content-section">
+      <div class="panel-container" style="padding:1rem 1.5rem; margin-bottom:1rem;">
+        <div style="display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:1rem;">
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <label style="font-size:0.85rem; color:var(--text-muted);">全局 Logger 输出级别:</label>
+            <select id="logLevelSelect" style="width:auto; padding:0.35rem 0.6rem; border-radius:6px; background:var(--bg-color); color:var(--text-main); border:1px solid var(--border-color);" onchange="changeLogLevel(this.value)">
+              <option value="info">info</option>
+              <option value="debug">debug</option>
+              <option value="trace">trace</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:0.5rem;">
+            <button class="btn btn-secondary" onclick="setLogFilter('')">全部 (ALL)</button>
+            <button class="btn btn-danger" onclick="setLogFilter('ERROR')">错误 (ERROR)</button>
+            <button class="btn btn-secondary" style="color:var(--warning);" onclick="setLogFilter('WARN')">警告 (WARN)</button>
+            <button class="btn btn-secondary" style="color:var(--primary);" onclick="setLogFilter('INFO')">信息 (INFO)</button>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:0.5rem; flex:1; max-width:300px;">
+            <input type="text" id="logSearchInput" placeholder="输入关键词实时过滤..." oninput="applyLogSearch(this.value)" style="padding:0.35rem 0.6rem; border-radius:6px; border:1px solid var(--border-color); background:var(--bg-color); color:var(--text-main); font-size:0.85rem; width:100%;">
+            <button class="btn btn-secondary" onclick="clearLogTerminal()">清屏</button>
+          </div>
+        </div>
+      </div>
+
       <div class="terminal" id="logTerminal">正在连接日志流通道...</div>
     </div>
   </main>
@@ -972,23 +999,78 @@
       } catch (e) {}
     }
 
-    // Connect SSE Log Stream
+    let currentLogFilter = "";
+    let currentLogSearch = "";
+    let currentEventSource = null;
+
+    async function fetchLogLevel() {
+      try {
+        const res = await fetch("/admin/api/log-level", { headers: getHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById("logLevelSelect").value = data.level || "info";
+        }
+      } catch (e) {}
+    }
+
+    async function changeLogLevel(level) {
+      try {
+        const res = await fetch("/admin/api/log-level", {
+          method: "POST",
+          headers: getHeaders(),
+          body: JSON.stringify({ level })
+        });
+        if (res.ok) {
+          alert(`全局 Logger 输出级别已实时切换为: ${level}`);
+        } else {
+          alert("切换日志级别失败");
+        }
+      } catch (e) {
+        alert("网络错误: " + e);
+      }
+    }
+
+    function setLogFilter(level) {
+      currentLogFilter = level;
+      initLogStream();
+    }
+
+    function applyLogSearch(val) {
+      currentLogSearch = val;
+      initLogStream();
+    }
+
+    function clearLogTerminal() {
+      document.getElementById("logTerminal").textContent = "";
+    }
+
+    // Connect SSE Log Stream with filters
     function initLogStream() {
       const term = document.getElementById("logTerminal");
+      if (currentEventSource) {
+        currentEventSource.close();
+      }
+      term.textContent = `[System] 连接日志通道 (级别: ${currentLogFilter || 'ALL'}, 过滤: '${currentLogSearch}')...\n`;
+
       try {
-        const eventSource = new EventSource("/admin/api/logs/stream?apiKey=" + encodeURIComponent(apiKey));
-        eventSource.onmessage = (event) => {
+        let url = `/admin/api/logs/stream?apiKey=${encodeURIComponent(apiKey)}`;
+        if (currentLogFilter) url += `&level=${encodeURIComponent(currentLogFilter)}`;
+        if (currentLogSearch) url += `&filter=${encodeURIComponent(currentLogSearch)}`;
+
+        currentEventSource = new EventSource(url);
+        currentEventSource.onmessage = (event) => {
           const data = JSON.parse(event.data);
           term.textContent += data.log + "\n";
           term.scrollTop = term.scrollHeight;
         };
-        eventSource.onerror = () => {
-          term.textContent += "\n[System] 日志推拉重连中...\n";
+        currentEventSource.onerror = () => {
+          term.textContent += "\n[System] 日志通道重连中...\n";
         };
       } catch (e) {}
     }
 
     // Initial Load & Auto Refresh Interval
+    fetchLogLevel();
     refreshData();
     initLogStream();
     setInterval(refreshData, 5000);

@@ -5,7 +5,7 @@ import { loadConfig, saveYamlConfig, readRawYamlContent, listDevProjects, type C
 import type { Store } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
 import type { CronManager } from "../scheduler/cron.js";
-import { logger } from "../util/logger.js";
+import { logger, getLogLevel, setLogLevel } from "../util/logger.js";
 
 // In-memory log buffer for live console streaming
 const LOG_BUFFER_MAX = 500;
@@ -305,17 +305,44 @@ export class AdminServer {
       return json({ audit });
     }
 
-    // 9. SSE Log Stream Endpoint
+    // 10. Dynamic Log Level Management
+    if (pathname === "/admin/api/log-level" && req.method === "GET") {
+      return json({ level: getLogLevel() });
+    }
+
+    if (pathname === "/admin/api/log-level" && req.method === "POST") {
+      const body = await this.readJsonBody<{ level: string }>(req);
+      if (!body.level) return json({ error: "Missing level parameter" }, 400);
+      const success = setLogLevel(body.level);
+      if (success) {
+        logger.info({ newLevel: body.level }, "Admin changed global log level");
+        return json({ success: true, level: getLogLevel() });
+      }
+      return json({ error: "Invalid log level" }, 400);
+    }
+
+    // 11. SSE Log Stream Endpoint
     if (pathname === "/admin/api/logs/stream" && req.method === "GET") {
+      const filterStr = url.searchParams.get("filter") || "";
+      const levelFilter = url.searchParams.get("level") || "";
+
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         Connection: "keep-alive",
       });
 
+      const matches = (log: string): boolean => {
+        if (levelFilter && !log.toLowerCase().includes(levelFilter.toLowerCase())) return false;
+        if (filterStr && !log.toLowerCase().includes(filterStr.toLowerCase())) return false;
+        return true;
+      };
+
       // Send recent buffered logs first
       for (const log of logBuffer) {
-        res.write(`data: ${JSON.stringify({ log })}\n\n`);
+        if (matches(log)) {
+          res.write(`data: ${JSON.stringify({ log })}\n\n`);
+        }
       }
 
       sseClients.add(res);

@@ -13,3 +13,17 @@ const transport = process.env.NO_PRETTY
 export const logger = pino({ level, ...(transport ? { transport } : {}) });
 
 export type Logger = typeof logger;
+
+export function getLogLevel(): string {
+  return logger.level;
+}
+
+export function setLogLevel(newLevel: string): boolean {
+  const validLevels = ["trace", "debug", "info", "warn", "error", "fatal"];
+  const normalized = newLevel.toLowerCase().trim();
+  if (validLevels.includes(normalized)) {
+    logger.level = normalized;
+    return true;
+  }
+  return false;
+}
