@@ -69,7 +69,8 @@ export_proxy_env() {
 
 # ── Process Helpers ──────────────────────────────────────────────────────────
 get_running_pids() {
-  pgrep -f "src/index.ts" 2>/dev/null || true
+  # Match any process executing tsx or node with src/index.ts
+  ps aux 2>/dev/null | grep -E "(tsx|node).*src/index\.ts" | grep -v grep | awk '{print $2}' || true
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -153,7 +154,7 @@ cmd_stop() {
     local saved_pid
     saved_pid=$(cat "${PID_FILE}")
     if [ -n "${saved_pid}" ] && kill -0 "${saved_pid}" 2>/dev/null; then
-      echo "[+] Sending SIGTERM to PID ${saved_pid}..."
+      echo "[+] Sending SIGTERM to recorded PID ${saved_pid}..."
       kill -15 "${saved_pid}" 2>/dev/null || true
     fi
     rm -f "${PID_FILE}"
@@ -161,14 +162,14 @@ cmd_stop() {
 
   for pid in ${pids}; do
     if kill -0 "${pid}" 2>/dev/null; then
-      echo "[+] Terminating process ${pid}..."
+      echo "[+] Sending SIGTERM to process ${pid}..."
       kill -15 "${pid}" 2>/dev/null || true
     fi
   done
 
-  # Wait up to 5 seconds for processes to exit
+  # Wait up to 3 seconds for processes to exit gracefully
   local count=0
-  while [ ${count} -lt 5 ]; do
+  while [ ${count} -lt 3 ]; do
     pids=$(get_running_pids)
     if [ -z "${pids}" ]; then
       break
@@ -177,7 +178,7 @@ cmd_stop() {
     count=$((count + 1))
   done
 
-  # Force kill any remaining
+  # Force kill any remaining processes
   pids=$(get_running_pids)
   if [ -n "${pids}" ]; then
     echo "[!] Force killing remaining process(es): ${pids}..."
@@ -217,7 +218,7 @@ cmd_start() {
   fi
 
   echo "[+] Launching CoBot in background..."
-  nohup npm run dev > "${LOG_FILE}" 2>&1 &
+  nohup npm start > "${LOG_FILE}" 2>&1 &
   local new_pid=$!
 
   echo "${new_pid}" > "${PID_FILE}"
