@@ -69,8 +69,35 @@ export_proxy_env() {
 
 # ── Process Helpers ──────────────────────────────────────────────────────────
 get_running_pids() {
-  # Match any process executing tsx or node with src/index.ts
-  ps aux 2>/dev/null | grep -E "(tsx|node).*src/index\.ts" | grep -v grep | awk '{print $2}' || true
+  # Prefer pgrep -f (works in restricted/container envs where `ps aux` is
+  # sandboxed and returns nothing); fall back to ps aux + grep.
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -f "(tsx|node).*src/index\.ts" 2>/dev/null || true
+  else
+    ps aux 2>/dev/null | grep -E "(tsx|node).*src/index\.ts" | grep -v grep | awk '{print $2}' || true
+  fi
+}
+
+# Best-effort SIGKILL of every CoBot process, retrying until none remain (or a
+# 12s budget elapses). Always returns 0 so `set -e` never aborts the script.
+# This is what makes `/restart` reliable: it guarantees the previous instance
+# is fully gone before a new one is launched, avoiding the "already running"
+# early-exit that previously left the bot dead after a restart.
+kill_all_cobot() {
+  local count=0
+  while [ ${count} -lt 12 ]; do
+    local pids
+    pids=$(get_running_pids)
+    if [ -z "${pids}" ]; then
+      return 0
+    fi
+    for pid in ${pids}; do
+      kill -9 "${pid}" 2>/dev/null || true
+    done
+    sleep 1
+    count=$((count + 1))
+  done
+  return 0
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -141,18 +168,9 @@ cmd_stop() {
   echo " Stopping CoBot"
   echo "=========================================="
 
-  local pids
-  pids=$(get_running_pids)
-
-  if [ -z "${pids}" ] && [ ! -f "${PID_FILE}" ]; then
-    echo "[i] CoBot is not currently running."
-    return 0
-  fi
-
-  # Stop recorded PID or detected PIDs gracefully
   if [ -f "${PID_FILE}" ]; then
     local saved_pid
-    saved_pid=$(cat "${PID_FILE}")
+    saved_pid=$(cat "${PID_FILE}" 2>/dev/null || true)
     if [ -n "${saved_pid}" ] && kill -0 "${saved_pid}" 2>/dev/null; then
       echo "[+] Sending SIGTERM to recorded PID ${saved_pid}..."
       kill -15 "${saved_pid}" 2>/dev/null || true
@@ -160,32 +178,10 @@ cmd_stop() {
     rm -f "${PID_FILE}"
   fi
 
-  for pid in ${pids}; do
-    if kill -0 "${pid}" 2>/dev/null; then
-      echo "[+] Sending SIGTERM to process ${pid}..."
-      kill -15 "${pid}" 2>/dev/null || true
-    fi
-  done
-
-  # Wait up to 3 seconds for processes to exit gracefully
-  local count=0
-  while [ ${count} -lt 3 ]; do
-    pids=$(get_running_pids)
-    if [ -z "${pids}" ]; then
-      break
-    fi
-    sleep 1
-    count=$((count + 1))
-  done
-
-  # Force kill any remaining processes
-  pids=$(get_running_pids)
-  if [ -n "${pids}" ]; then
-    echo "[!] Force killing remaining process(es): ${pids}..."
-    for pid in ${pids}; do
-      kill -9 "${pid}" 2>/dev/null || true
-    done
-  fi
+  # Graceful shutdown window, then a hard kill loop until nothing remains.
+  echo "[+] Waiting for graceful shutdown..."
+  sleep 2
+  kill_all_cobot
 
   # Clean stale SQLite task locks if database exists
   if [ -f "${DB_FILE}" ] && command -v sqlite3 >/dev/null 2>&1; then
@@ -201,15 +197,21 @@ cmd_start() {
   echo " Starting CoBot"
   echo "=========================================="
 
-  local existing_pids
-  existing_pids=$(get_running_pids)
-
-  if [ -n "${existing_pids}" ]; then
-    echo "[!] CoBot is already running (PID: ${existing_pids}). Stop it first or run: $0 restart"
-    exit 1
-  fi
+  # Ensure a clean slate — clear any lingering instance before launching. This
+  # is what lets `restart` reliably bring the bot back up.
+  kill_all_cobot || true
 
   export_proxy_env
+
+  # Decide tsx launch mode. COBOT_WATCH=1 → hot-reload (tsx watch), so a Telegram
+  # /restart keeps the dev experience. The flag is exported so the spawned bot
+  # (and any future restart) inherits it.
+  if [ "${COBOT_WATCH:-}" = "1" ] || [ "${COBOT_WATCH:-}" = "true" ] || [ "${COBOT_WATCH:-}" = "yes" ]; then
+    TSX_CMD="npx tsx watch"
+  else
+    TSX_CMD="npx tsx"
+  fi
+  export COBOT_WATCH="${COBOT_WATCH:-0}"
 
   if [ -n "${PROXY_URL}" ]; then
     echo "[+] Proxy detected & enabled: ${PROXY_URL}"
@@ -217,8 +219,9 @@ cmd_start() {
     echo "[!] No HTTP proxy detected. Telegram API outbound calls may require proxy on this network."
   fi
 
+  echo "[+] Launch mode: ${TSX_CMD}"
   echo "[+] Launching CoBot in background..."
-  nohup npx tsx src/index.ts > "${LOG_FILE}" 2>&1 &
+  nohup ${TSX_CMD} src/index.ts > "${LOG_FILE}" 2>&1 &
   local new_pid=$!
 
   echo "${new_pid}" > "${PID_FILE}"

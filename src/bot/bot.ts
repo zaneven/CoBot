@@ -32,6 +32,7 @@ import {
   handleNewProjectClick,
   handleApprove,
   handleApproveModeCallback,
+  handleBot,
 } from "./commands.js";
 import { handlePhoto, handleDocument } from "./media.js";
 
@@ -89,6 +90,9 @@ export function createBot(
   bot.command("context", (ctx) => handleContext(ctx, registry));
   bot.command("skills", (ctx) => handleSkills(ctx));
   bot.command("approve", (ctx) => handleApprove(ctx, store));
+  bot.command("bot", (ctx) => handleBot(ctx));
+  // /restart is a convenience alias for /bot restart.
+  bot.command("restart", (ctx) => handleBot(ctx, "restart"));
 
   // /skills pagination: prev/next buttons (skp:<page>).
   bot.callbackQuery(/^skp:/, (ctx) => handleSkillsPage(ctx));

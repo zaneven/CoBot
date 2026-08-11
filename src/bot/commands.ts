@@ -8,6 +8,7 @@ import type { Registry } from "../registry/registry.js";
 import type { CronManager } from "../scheduler/cron.js";
 import { listProjectSessions, listAllSessions, findSession } from "../claude/sessions.js";
 import { submitInteractive } from "./runs.js";
+import { runBotCtl, tailBotLog, type BotCtlAction } from "./ctl.js";
 import { logger } from "../util/logger.js";
 
 /** Single source of truth for the bot's commands. Drives both the Telegram
@@ -36,6 +37,8 @@ export const BOT_COMMANDS: readonly BotCommandDef[] = [
   { command: "context", usage: "/context", description: "last turn's context window usage"},
   { command: "skills", usage: "/skills", description: "browse and select skills" },
   { command: "approve", usage: "/approve auto|interactive", description: "tool-call approval mode" },
+  { command: "bot", usage: "/bot <start|stop|restart|status|install>", description: "control the bot (--watch for hot-reload)" },
+  { command: "restart", usage: "/restart", description: "restart the bot (keeps current launch mode)" },
   { command: "help", usage: "/help", description: "show this help" },
 ];
 
@@ -55,6 +58,11 @@ function projectList(config: Config): string {
 function truncate(s: string, n: number): string {
   const one = s.replace(/\s+/g, " ").trim();
   return one.length > n ? one.slice(0, n - 1) + "…" : one;
+}
+
+/** Escape a string for safe inclusion inside Telegram HTML (<pre>/<code>). */
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function relTime(ms: number): string {
@@ -832,4 +840,90 @@ export async function handleApproveModeCallback(ctx: Context, store: Store): Pro
     logger.debug({ err: String(err) }, "approve mode edit failed");
   }
   await ctx.answerCallbackQuery({ text: `已切换为 ${target === "auto" ? "自动" : "手动"}` });
+}
+
+// ── Bot lifecycle control (/bot start|stop|restart|status|install) ──────────
+
+const BOT_CTL_ACTIONS = new Set(["start", "stop", "restart", "status", "install"]);
+
+/**
+ * /bot <action> — drive scripts/cobot.sh from Telegram.
+ *
+ *   status  → read-only report (in-process, no `ps` dependency)
+ *   restart → ack, then fire the DETACHED control script (it kills this
+ *             process and boots a fresh instance) — do NOT await it
+ *   stop    → same self-kill pattern as restart
+ *   start   → ack + await the script (does not kill this process)
+ *   install → ack + await the script (npm install / rebuild / link)
+ *
+ * /restart is a convenience alias wired to forcedArg="restart" in bot.ts.
+ */
+export async function handleBot(ctx: Context, forcedArg?: string): Promise<void> {
+  const rawArg = forcedArg ?? (typeof ctx.match === "string" ? ctx.match.trim().toLowerCase() : "");
+  // Split action from flags like --watch / --no-watch.
+  const parts = rawArg.split(/\s+/).filter(Boolean);
+  const arg = parts[0] ?? "";
+  let forceWatch: boolean | undefined;
+  if (parts.includes("--watch")) forceWatch = true;
+  else if (parts.includes("--no-watch")) forceWatch = false;
+
+  if (!BOT_CTL_ACTIONS.has(arg)) {
+    await ctx.reply(
+      "用法: /bot <动作> [--watch|--no-watch]\n" +
+        "• start   启动服务\n" +
+        "• stop    停止服务\n" +
+        "• restart 重启服务 (默认沿用当前启动模式)\n" +
+        "• status  查看运行状态与最近日志\n" +
+        "• install 安装依赖 / 重建原生绑定 / 注册命令\n\n" +
+        "--watch    以热重载(tsx watch)模式启动\n" +
+        "--no-watch 以普通模式启动",
+    );
+    return;
+  }
+
+  // status — report without touching the process.
+  if (arg === "status") {
+    const uptimeMin = Math.floor(process.uptime() / 60);
+    const proxy =
+      process.env.COBOT_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || "(system / none)";
+    const watch = process.env.COBOT_WATCH === "1" ? "✅ 热重载 (tsx watch)" : "❌ 普通模式 (tsx)";
+    const log = escHtml(tailBotLog(12));
+    await ctx.reply(
+      `🤖 CoBot 状态\n` +
+        `• 运行状态: 运行中 (PID ${process.pid})\n` +
+        `• 运行时长: ${uptimeMin}m\n` +
+        `• 启动模式: ${watch}\n` +
+        `• 代理: ${escHtml(proxy)}\n\n` +
+        `📜 最近日志:\n<pre>${log}</pre>`,
+      { parse_mode: "HTML" },
+    );
+    return;
+  }
+
+  // restart / stop — these kill THIS process, so acknowledge first and then
+  // fire the detached script without awaiting (the process will be gone).
+  if (arg === "restart" || arg === "stop") {
+    const verb = arg === "restart" ? "🔄 正在重启 CoBot…" : "⏹ 正在停止 CoBot…";
+    const modeHint = forceWatch === true ? " (热重载模式)" : forceWatch === false ? " (普通模式)" : "";
+    const eta = arg === "restart" ? "约需 10 秒，重启后自动恢复" : "约需 5 秒";
+    await ctx.reply(`${verb}${modeHint}\n(${eta})`);
+    void runBotCtl(arg as BotCtlAction, undefined, { forceWatch });
+    return;
+  }
+
+  // start / install — safe to await; the script does not kill this process.
+  const verb = arg === "install" ? "📦 正在安装依赖并重建原生绑定" : "▶️ 正在启动 CoBot";
+  const modeHint = forceWatch === true ? " (热重载模式)" : forceWatch === false ? " (普通模式)" : "";
+  await ctx.reply(`${verb}${modeHint}…`);
+  const res = await runBotCtl(arg as BotCtlAction, undefined, { forceWatch });
+  const head = escHtml(tailBotLog(12));
+  if (res.ok) {
+    await ctx.reply(`${arg === "install" ? "📦 安装" : "▶️ 启动"}完成 ✅\n\n<pre>${head}</pre>`, {
+      parse_mode: "HTML",
+    });
+  } else {
+    await ctx.reply(`${arg === "install" ? "📦 安装" : "▶️ 启动"}失败 ❌ (exit ${res.code})\n\n<pre>${head}</pre>`, {
+      parse_mode: "HTML",
+    });
+  }
 }

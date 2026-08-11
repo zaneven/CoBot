@@ -84,16 +84,18 @@ async function runTurn(opts: {
 
   // ── Multi-message structure (Claude-Code-style) ──────────────────────────
   // ① Each agentic "round" becomes its own Telegram message: a header line
-  //   (how long it thought + what tools it called) above a short "thinking
-  //   fragment" (live reasoning, when the model emits it). It deliberately does
-  //   NOT contain the answer body, so nothing is duplicated.
-  // ② After the run we send the full clean answer — the only place the complete
-  //   body appears.
+  //   (how long it thought + what tools it called) above THAT ROUND'S OWN text
+  //   output, streamed live. Each round shows only its own slice — nothing is
+  //   accumulated across rounds, so the per-round views stay short.
+  // ② After the run we send the final round's text as the clean consolidated
+  //   answer — i.e. only the *last* round's output, not the whole transcript,
+  //   so it never duplicates the earlier ① messages.
   // ③ Then a done summary (token counts, cost, duration).
   let currentRound: TelegramStreamer | null = null;
   let roundStartMs = 0;
   let roundToolCounts: Record<string, number> = {};
-  let fullText = ""; // accumulated answer text across all rounds (for ②)
+  let roundText = ""; // this round's own answer text (reset each round)
+  let lastRoundText = ""; // the final round's text, used for ②
 
   /** Build the current round's top-of-message header. `durationMs` omitted while
    *  the round is still streaming (shows "思考中"); pass it at finalize. */
@@ -127,8 +129,8 @@ async function runTurn(opts: {
           }
           break;
         case "roundStart":
-          // Close the previous round's message (set its final header) and open
-          // a fresh one for this round.
+          // Close the previous round's message (its text was already streamed
+          // live into the body) and open a fresh one for this round.
           if (currentRound) {
             currentRound.setHeader(roundHeader(Date.now() - roundStartMs));
             await currentRound.finalize();
@@ -136,20 +138,22 @@ async function runTurn(opts: {
           currentRound = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
           roundStartMs = Date.now();
           roundToolCounts = {};
+          roundText = "";
           currentRound.setHeader(roundHeader());
           break;
         case "text":
           indicator.activity();
-          // ② owns the complete answer — accumulate for the final message only;
-          // do NOT stream into ① (that would duplicate the body).
-          fullText += ev.delta;
+          // Stream this round's own text straight into ①. We accumulate only
+          // into roundText (this round's slice) — no cross-round accumulation,
+          // so ① never grows into one giant block.
+          roundText += ev.delta;
+          if (currentRound) await currentRound.text(ev.delta);
           break;
         case "thinking":
-          // ① shows the live reasoning as a "thinking fragment" under its
-          // header, so a long think isn't silent. The final answer body is
-          // delivered once, in ②, and never duplicated here.
+          // Reasoning in progress — show a progress marker so a long think
+          // isn't silent, but don't surface the (very long) chain-of-thought in
+          // chat; the answer text is what lands in ①.
           indicator.thinking();
-          if (currentRound) await currentRound.thinkingFragment(ev.delta);
           break;
         case "tool":
           indicator.activity();
@@ -175,9 +179,11 @@ async function runTurn(opts: {
           capturedInputTokens = ev.usage?.inputTokens;
           capturedOutputTokens = ev.usage?.outputTokens;
           capturedContextUsagePct = ev.contextUsagePct;
-          // Close the final round's message with its definitive header.
+          // Close the final round's message with its definitive header. Its text
+          // was already streamed live into the body; capture it as the answer.
           if (currentRound) {
             currentRound.setHeader(roundHeader(Date.now() - roundStartMs));
+            lastRoundText = roundText.trim();
             await currentRound.finalize();
             currentRound = null;
           }
@@ -199,8 +205,9 @@ async function runTurn(opts: {
             await api.sendMessage(chatId, `⏹ Interrupted${reason}.`);
           } else {
             // ② Complete, clean final answer (no per-round headers) as its own
-            //    message — the consolidated view of everything that was said.
-            const answer = fullText.trim() || ev.text.trim();
+            //    message — only the LAST round's text, so it never duplicates
+            //    the earlier ① per-round messages.
+            const answer = lastRoundText || ev.text.trim();
             if (answer) {
               const answerStreamer = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
               await answerStreamer.text(answer);

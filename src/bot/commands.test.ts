@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { InlineKeyboard, Context } from "grammy";
-import { renderProjectsKeyboard, renderApprovalKeyboard, handleApprove, handleApproveModeCallback } from "./commands.js";
+import { renderProjectsKeyboard, renderApprovalKeyboard, handleApprove, handleApproveModeCallback, handleBot } from "./commands.js";
 
 // grammY's InlineKeyboard instance carries the built grid on `.inline_keyboard`.
 type Button = { text?: string; callback_data?: string };
@@ -166,4 +166,60 @@ test("handleApproveModeCallback refuses when no project is bound", async () => {
   assert.equal(store.mode, "auto", "mode unchanged");
   assert.equal(edited.length, 0, "no edit when unbound");
   assert.equal((answered[0] as { text?: string })?.text, "请先 /projects 选择项目");
+});
+
+// ── /bot lifecycle control ──────────────────────────────────────────────
+
+test("/bot with no/invalid arg replies usage", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /用法/);
+  assert.match(sent[0]!.text, /restart/);
+});
+
+test("/bot status reports running state as HTML", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx, "status");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /CoBot 状态/);
+  assert.match(sent[0]!.text, /运行状态/);
+  assert.equal((sent[0]!.opts as { parse_mode?: string })?.parse_mode, "HTML");
+});
+
+test("/bot restart replies an ack without blocking (fire-and-forget)", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx, "restart");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /正在重启/);
+});
+
+test("/bot restart --watch announces hot-reload mode", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx, "restart --watch");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /正在重启/);
+  assert.match(sent[0]!.text, /热重载模式/);
+});
+
+test("/bot restart --no-watch announces plain mode", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx, "restart --no-watch");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /普通模式/);
+});
+
+test("/bot status shows hot-reload mode when COBOT_WATCH=1", async () => {
+  const prev = process.env.COBOT_WATCH;
+  process.env.COBOT_WATCH = "1";
+  try {
+    const { ctx, sent } = mkCtx();
+    await handleBot(ctx, "status");
+    assert.equal(sent.length, 1);
+    assert.match(sent[0]!.text, /启动模式/);
+    assert.match(sent[0]!.text, /热重载/);
+  } finally {
+    if (prev === undefined) delete process.env.COBOT_WATCH;
+    else process.env.COBOT_WATCH = prev;
+  }
 });

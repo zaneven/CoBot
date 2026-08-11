@@ -38,7 +38,33 @@ async function main(): Promise<void> {
 
   bot.catch((err) => logger.error({ err: String(err.error) }, "bot error"));
 
-  await bot.init();
+  // Guard the Telegram handshake. If the proxy is down or api.telegram.org is
+  // unreachable, bot.init()/getMe() would hang silently for minutes (the bot
+  // process stays alive but never receives messages — i.e. "no response"). We
+  // fail fast with a clear log so the cause is obvious instead of a silent hang.
+  const initTimeoutMs = 25000;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`Telegram init timed out after ${initTimeoutMs / 1000}s — check network/proxy to api.telegram.org`)),
+        initTimeoutMs,
+      );
+      bot
+        .init()
+        .then(() => bot.api.getMe())
+        .then(() => {
+          clearTimeout(timer);
+          resolve();
+        })
+        .catch((e) => {
+          clearTimeout(timer);
+          reject(e);
+        });
+    });
+  } catch (err) {
+    logger.error({ err: String(err) }, "bot failed to initialize (cannot reach Telegram — check proxy/token)");
+    process.exit(1);
+  }
   const me = await bot.api.getMe();
   logger.info(
     { username: me.username, hermes: config.hermes.enabled, taskTimeoutMs: config.claude.taskTimeoutMs },
