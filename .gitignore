@@ -1,16 +1,65 @@
+# ── Dependencies & Build Artifacts ───────────────────────────────────────────
 node_modules/
 dist/
+build/
+out/
+*.tsbuildinfo
+coverage/
+*.tgz
+
+# ── Logs & Runtime Files ──────────────────────────────────────────────────────
 *.log
-.env
-.env.local
+logs/
+nohup.out
+*.pid
+*.seed
+*.pid.lock
+
+# ── Storage & Local Database ──────────────────────────────────────────────────
 data/
 *.db
 *.db-*
+*.sqlite
+*.sqlite3
+
+# ── Environment & Local Configuration ─────────────────────────────────────────
+.env
+.env.local
+.env.*.local
 !.env.example
 config.yaml
+!config.example.yaml
+
+# ── Editor & IDE Artifacts ────────────────────────────────────────────────────
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 *.swp
-*.sock
-nohup.out
-tmp_*.ts
+*.swo
+*~
+
+# ── AI Tools & Agent Local State ─────────────────────────────────────────────
 .workbuddy/
+.claude/*.local.json
+.claude/settings.local.json
+.gemini/
+
+# ── Temporary & Socket Files ──────────────────────────────────────────────────
+tmp_*.ts
+*.tmp
+*.sock
