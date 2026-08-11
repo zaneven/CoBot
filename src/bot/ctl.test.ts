@@ -54,6 +54,12 @@ test("runBotCtl forces plain mode via COBOT_WATCH=0", async () => {
   assert.match(r.output, /WATCH=0/);
 });
 
+test("runBotCtl carries notifyChatId into the child env", async () => {
+  const r = await runBotCtl("install", fixture('echo "CID=$COBOT_NOTIFY_CID"'), { notifyChatId: 12345 });
+  assert.equal(r.ok, true);
+  assert.match(r.output, /CID=12345/);
+});
+
 test("detectWatchMode reflects process.env.COBOT_WATCH", () => {
   const prev = process.env.COBOT_WATCH;
   process.env.COBOT_WATCH = "1";

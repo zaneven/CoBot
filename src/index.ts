@@ -82,6 +82,22 @@ async function main(): Promise<void> {
     logger.warn({ err: String(err) }, "failed to register bot command menu");
   }
 
+  // If this process was restarted via Telegram, tell the originating chat the
+  // bot is back up. The old instance died before it could confirm, so the id is
+  // carried here via COBOT_NOTIFY_CID (set by runBotCtl on /restart). Must run
+  // BEFORE startPolling() below — bot.start() blocks for the lifetime of the
+  // process, so anything after it would never execute. sendMessage only needs a
+  // valid token, not an active long-poll.
+  const notifyCid = process.env.COBOT_NOTIFY_CID;
+  if (notifyCid) {
+    try {
+      await bot.api.sendMessage(Number(notifyCid), "✅ CoBot 已重启成功，服务正常运行");
+      logger.info({ chatId: Number(notifyCid) }, "sent restart-success notification");
+    } catch (err) {
+      logger.warn({ err: String(err) }, "failed to send restart-success notification");
+    }
+  }
+
   let shuttingDown = false;
   const stop = async (sig: string) => {
     if (shuttingDown) return;

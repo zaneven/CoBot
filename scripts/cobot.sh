@@ -69,13 +69,17 @@ export_proxy_env() {
 
 # ── Process Helpers ──────────────────────────────────────────────────────────
 get_running_pids() {
-  # Prefer pgrep -f (works in restricted/container envs where `ps aux` is
-  # sandboxed and returns nothing); fall back to ps aux + grep.
-  if command -v pgrep >/dev/null 2>&1; then
-    pgrep -f "(tsx|node).*src/index\.ts" 2>/dev/null || true
-  else
+  # macOS `pgrep -f` can silently return NOTHING for CoBot's node/tsx tree (it
+  # can't always read argv for detached/launchd-reparented processes) even while
+  # the bot is plainly running — `ps` sees it fine. In sandboxed/container envs
+  # the reverse holds (ps is restricted, pgrep works). Take the UNION of both so
+  # the bot is always detected, then emit unique numeric PIDs only.
+  {
+    if command -v pgrep >/dev/null 2>&1; then
+      pgrep -f "(tsx|node).*src/index\.ts" 2>/dev/null || true
+    fi
     ps aux 2>/dev/null | grep -E "(tsx|node).*src/index\.ts" | grep -v grep | awk '{print $2}' || true
-  fi
+  } | tr -s '[:space:]' '\n' | grep -E '^[0-9]+$' | sort -n -u
 }
 
 # Best-effort SIGKILL of every CoBot process, retrying until none remain (or a

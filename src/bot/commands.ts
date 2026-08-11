@@ -907,7 +907,10 @@ export async function handleBot(ctx: Context, forcedArg?: string): Promise<void>
     const modeHint = forceWatch === true ? " (热重载模式)" : forceWatch === false ? " (普通模式)" : "";
     const eta = arg === "restart" ? "约需 10 秒，重启后自动恢复" : "约需 5 秒";
     await ctx.reply(`${verb}${modeHint}\n(${eta})`);
-    void runBotCtl(arg as BotCtlAction, undefined, { forceWatch });
+    // On restart, carry the originating chat id so the next instance can push a
+    // "restart complete" confirmation (this instance dies first).
+    const notifyChatId = arg === "restart" ? ctx.chat?.id ?? ctx.from?.id : undefined;
+    void runBotCtl(arg as BotCtlAction, undefined, { forceWatch, notifyChatId });
     return;
   }
 
