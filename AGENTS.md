@@ -17,7 +17,7 @@
 | Agent 角色 | 配置文件 | 职责范围 |
 | :--- | :--- | :--- |
 | **Architect** | [cobot-architect.md](file:///.claude/agents/cobot-architect.md) | **架构设计与新功能规划**：负责新命令设计、队列/注册表模型演进、多模态支持与 SDK/Bot 边界重构。 |
-| **Debugger** | [cobot-debug.md](file:///.claude/agents/cobot-debug.md) | **运行时故障诊断**：排查 Telegram ↔ CoBot ↔ Claude SDK ↔ Gateway (fcc-server) 链路异常、代理超时与数据库状态。 |
+| **Debugger** | [cobot-debug.md](file:///.claude/agents/cobot-debug.md) | **运行时故障诊断**：排查 Telegram ↔ CoBot ↔ Claude SDK 链路异常、代理超时与数据库状态。 |
 | **Reviewer** | [cobot-review.md](file:///.claude/agents/cobot-review.md) | **代码评审与质量把控**：审查 PR/Diff，重点关注流式正确性、队列安全、代理/网络边角案、Telegram API 限频及测试覆盖率。 |
 
 ---
@@ -150,7 +150,6 @@ src/
 
 遇到运行异常时，请按顺序检查：
 1. **服务控制**：运行 `cobot status` 或 `cobot restart` 排查或重置服务状态。
-2. **网关状态**：`lsof -nP -iTCP:8082 -sTCP:LISTEN`（检查 `fcc-server`）。
-3. **代理可用性**：`scutil --proxy` 确认 `127.0.0.1:10808` 代理正常开启。
-4. **残留任务清理**：`sqlite3 data/cobot.db "SELECT * FROM running_tasks WHERE status='running'"`（确认是否有未清理的死锁任务）。
-5. **日志分析**：查阅 `bot.log`、`~/.fcc/logs/server.log` 与 CoBot 控制台 pino 输出。
+2. **代理可用性**：`scutil --proxy` 确认 `127.0.0.1:10808` 代理正常开启。
+3. **残留任务清理**：`sqlite3 data/cobot.db "SELECT * FROM running_tasks WHERE status='running'"`（确认是否有未清理的死锁任务）。
+4. **日志分析**：查阅 `bot.log` 与 CoBot 控制台 pino 输出。
