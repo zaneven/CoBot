@@ -17,12 +17,36 @@ A standalone TypeScript Telegram bot that drives and interacts with locally-acti
 
 ## Quick start
 
+### 1. Installation & Setup
+
 ```bash
-cp .env.example .env        # set TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_USERS
-cp config.example.yaml config.yaml   # whitelist your dev roots
+# Automated setup (copies config templates, installs npm deps, rebuilds native SQLite, & links global 'cobot' CLI)
+./scripts/cobot.sh install
+```
+
+Manual setup alternative:
+```bash
+cp .env.example .env                  # set TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_USERS
+cp config.example.yaml config.yaml     # whitelist your dev roots
 npm install
-npm rebuild better-sqlite3  # if Node version changed
-npm start
+npm rebuild better-sqlite3            # if Node version changed
+```
+
+### 2. Service Management (Global CLI)
+
+Once `./scripts/cobot.sh install` completes, you can manage CoBot from **any directory** using the `cobot` CLI command:
+
+```bash
+cobot start    # Start CoBot background service (with automatic proxy detection)
+cobot status   # Check process status and recent logs
+cobot restart  # Restart service (gracefully clears SQLite task locks)
+cobot stop     # Gracefully stop service
+```
+
+Alternatively, invoke via script or npm:
+```bash
+./scripts/cobot.sh [start|stop|restart|status]
+npm run cobot [start|stop|restart|status]
 ```
 
 ## Commands

@@ -128,10 +128,29 @@ src/
 
 ---
 
-## 7. 诊断与排错参考
+## 7. 服务控制与 CLI 管理 (Service Management)
+
+本项目提供了统一的服务控制脚本 [scripts/cobot.sh](file:///scripts/cobot.sh) 及全局 `cobot` CLI 指令：
+
+1. **环境依赖与 CLI 注册**：
+   ```bash
+   ./scripts/cobot.sh install
+   ```
+   该指令会自动复制配置文件模版、安装 npm 依赖、检查重构 SQLite 原生 C++ 模块，并自动注册全局 `cobot` 命令行软链接。
+
+2. **全局服务管理命令（可在系统任何目录下运行）**：
+   - `cobot start` 或 `./scripts/cobot.sh start`：后台启动 Bot 服务，自动检测并注入代理（如 `127.0.0.1:10808`）。
+   - `cobot stop` 或 `./scripts/cobot.sh stop`：平滑关闭进程并清理 SQLite 数据库中因中断残留的任务锁。
+   - `cobot restart` 或 `./scripts/cobot.sh restart`：安全重启 Bot 服务。
+   - `cobot status` 或 `./scripts/cobot.sh status`：查看服务 PID 状态、代理连通及 `bot.log` 运行日志。
+
+---
+
+## 8. 诊断与排错参考
 
 遇到运行异常时，请按顺序检查：
-1. **网关状态**：`lsof -nP -iTCP:8082 -sTCP:LISTEN`（检查 `fcc-server`）。
-2. **代理可用性**：`scutil --proxy` 确认 `127.0.0.1:10808` 代理正常开启。
-3. **残留任务清理**：`sqlite3 data/cobot.db "SELECT * FROM running_tasks WHERE status='running'"`（确认是否有未清理的死锁任务）。
-4. **日志分析**：查阅 `~/.fcc/logs/server.log` 与 CoBot 控制台 pino 输出。
+1. **服务控制**：运行 `cobot status` 或 `cobot restart` 排查或重置服务状态。
+2. **网关状态**：`lsof -nP -iTCP:8082 -sTCP:LISTEN`（检查 `fcc-server`）。
+3. **代理可用性**：`scutil --proxy` 确认 `127.0.0.1:10808` 代理正常开启。
+4. **残留任务清理**：`sqlite3 data/cobot.db "SELECT * FROM running_tasks WHERE status='running'"`（确认是否有未清理的死锁任务）。
+5. **日志分析**：查阅 `bot.log`、`~/.fcc/logs/server.log` 与 CoBot 控制台 pino 输出。
