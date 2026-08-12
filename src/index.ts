@@ -14,7 +14,8 @@ async function main(): Promise<void> {
 
   if (!config.telegramToken) {
     logger.error("TELEGRAM_BOT_TOKEN not set. Copy .env.example to .env and configure it.");
-    process.exit(1);
+    setTimeout(() => process.exit(1), 100);
+    return;
   }
   if (config.allowedUsers.size === 0) {
     logger.warn("TELEGRAM_ALLOWED_USERS is empty — the bot will ignore everyone. Set it in .env.");
@@ -63,7 +64,8 @@ async function main(): Promise<void> {
     });
   } catch (err) {
     logger.error({ err: String(err) }, "bot failed to initialize (cannot reach Telegram — check proxy/token)");
-    process.exit(1);
+    setTimeout(() => process.exit(1), 100);
+    return;
   }
   const me = await bot.api.getMe();
   logger.info(
@@ -138,5 +140,5 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   logger.error({ err: String(err) }, "fatal startup error");
-  process.exit(1);
+  setTimeout(() => process.exit(1), 100);
 });
