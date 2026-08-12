@@ -8,7 +8,7 @@ import { getLogLevel, setLogLevel } from "../util/logger.js";
 
 test("Admin API: GET & POST /admin/api/log-level for dynamic Pino log level control", async () => {
   const config = loadConfig();
-  config.admin = { enabled: true, host: "127.0.0.1", port: 18099, apiKey: "loglevel-key" };
+  config.admin = { enabled: true, host: "127.0.0.1", port: 18099, apiKey: "loglevel-key", authEnabled: true };
 
   const store = new Store(":memory:");
   const registry = new Registry(store);

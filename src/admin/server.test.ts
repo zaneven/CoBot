@@ -20,7 +20,7 @@ function makeConfig(port: number): Config {
       enabled: true,
       host: "127.0.0.1",
       port,
-      apiKey: "test-secret-key",
+      apiKey: "test-secret-key", authEnabled: true,
     },
     dbPath: ":memory:",
     projects: [resolve("/tmp")],

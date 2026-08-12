@@ -20,7 +20,7 @@ test("Admin API Phase 1: GET & POST /admin/api/config update and hot-reload", as
   writeFileSync(tmpConfigPath, "defaults:\n  maxTurns: 30\n", "utf8");
 
   const config = loadConfig(tmpConfigPath);
-  config.admin = { enabled: true, host: "127.0.0.1", port: 18090, apiKey: "test-key" };
+  config.admin = { enabled: true, host: "127.0.0.1", port: 18090, apiKey: "test-key", authEnabled: true };
 
   const store = new Store(":memory:");
   const registry = new Registry(store);
@@ -55,7 +55,7 @@ test("Admin API Phase 1: GET & POST /admin/api/config update and hot-reload", as
 
 test("Admin API Phase 1: POST & DELETE /admin/api/bindings for Chat binding management", async () => {
   const config = loadConfig();
-  config.admin = { enabled: true, host: "127.0.0.1", port: 18091, apiKey: "test-key" };
+  config.admin = { enabled: true, host: "127.0.0.1", port: 18091, apiKey: "test-key", authEnabled: true };
 
   const store = new Store(":memory:");
   const registry = new Registry(store);

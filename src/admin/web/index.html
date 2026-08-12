@@ -285,8 +285,8 @@
     </nav>
 
     <div class="api-key-box">
-      <label style="font-size:0.75rem; color:var(--text-muted); display:block; margin-bottom:0.25rem;">API Key 鉴权</label>
-      <input type="password" id="apiKeyInput" placeholder="输入 Admin API Key" onchange="saveApiKey(this.value)">
+      <label style="font-size:0.75rem; color:var(--text-muted); display:block; margin-bottom:0.25rem;">Admin API Key</label>
+      <input type="password" id="apiKeyInput" placeholder="Enter API Key" oninput="saveApiKey(this.value)">
     </div>
   </aside>
 
@@ -599,11 +599,12 @@
     function saveApiKey(val) {
       apiKey = val;
       localStorage.setItem("cobot_admin_key", val);
-      refreshData();
+      if (apiKey) refreshData();
     }
 
     function getHeaders() {
-      return { "Authorization": "Bearer " + apiKey, "Content-Type": "application/json" };
+      const val = document.getElementById("apiKeyInput").value;
+      return { "Authorization": "Bearer " + val, "Content-Type": "application/json", "X-Admin-Api-Key": val };
     }
 
     function switchTab(tabId, el) {
@@ -649,6 +650,7 @@
     }
 
     async function viewAuditDetail(id) {
+      if (!document.getElementById("apiKeyInput").value) return;
       try {
         const res = await fetch("/admin/api/audit/detail?id=" + encodeURIComponent(id), { headers: getHeaders() });
         if (res.ok) {
@@ -684,6 +686,7 @@
     }
 
     async function abortTask(taskId) {
+      if (!document.getElementById("apiKeyInput").value) return;
       if (!confirm("确定要强行中断该任务吗？")) return;
       try {
         const res = await fetch("/admin/api/tasks/abort", {
@@ -700,6 +703,7 @@
     }
 
     async function toggleCron(id, enabled) {
+      if (!document.getElementById("apiKeyInput").value) return;
       try {
         await fetch("/admin/api/cron/toggle", {
           method: "POST",
@@ -713,6 +717,7 @@
     }
 
     async function unbindChat(chatId) {
+      if (!document.getElementById("apiKeyInput").value) return;
       if (!confirm(`确定解绑 Chat ID ${chatId} 的工程目录吗？`)) return;
       try {
         await fetch("/admin/api/bindings", {
@@ -727,6 +732,7 @@
     }
 
     async function submitNewBinding() {
+      if (!document.getElementById("apiKeyInput").value) return;
       const chatId = Number(document.getElementById("bindChatId").value);
       const projectPath = document.getElementById("bindProjectPath").value.trim();
       if (!chatId || !projectPath) {
@@ -752,6 +758,7 @@
     }
 
     async function deleteRule(chatId, toolName) {
+      if (!document.getElementById("apiKeyInput").value) return;
       if (!confirm(`确定撤销工具 ${toolName} 的自动授权规则吗？`)) return;
       try {
         await fetch("/admin/api/approval-rules", {
@@ -766,6 +773,7 @@
     }
 
     async function loadConfigData() {
+      if (!document.getElementById("apiKeyInput").value) return;
       try {
         const res = await fetch("/admin/api/config", { headers: getHeaders() });
         if (res.ok) {
@@ -786,6 +794,7 @@
 
     async function submitConfig(e) {
       e.preventDefault();
+      if (!document.getElementById("apiKeyInput").value) return;
       const allowedUsersInput = document.getElementById("cfgAllowedUsers").value
         .split(/[\n,]+/).map(s => s.trim()).filter(Boolean).map(Number).filter(n => Number.isFinite(n));
 
@@ -822,6 +831,9 @@
     }
 
     async function refreshData() {
+      if (document.hidden) return;
+      if (!document.getElementById("apiKeyInput").value) return;
+
       // 1. Fetch Status
       try {
         const res = await fetch("/admin/api/status", { headers: getHeaders() });
@@ -1004,6 +1016,7 @@
     let currentEventSource = null;
 
     async function fetchLogLevel() {
+      if (!apiKey && !document.getElementById("apiKeyInput").value) return;
       try {
         const res = await fetch("/admin/api/log-level", { headers: getHeaders() });
         if (res.ok) {
@@ -1046,6 +1059,7 @@
 
     // Connect SSE Log Stream with filters using short-lived token
     async function initLogStream() {
+      if (!apiKey && !document.getElementById("apiKeyInput").value) return;
       const term = document.getElementById("logTerminal");
       if (currentEventSource) {
         currentEventSource.close();
