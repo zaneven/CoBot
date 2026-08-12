@@ -171,15 +171,15 @@ test("AdminServer: 429 Too Many Requests when rate limit is exceeded", async () 
   await server.start();
 
   try {
-    // Send 60 requests to hit the threshold
-    for (let i = 0; i < 60; i++) {
+    // Send 300 requests to hit the threshold
+    for (let i = 0; i < 300; i++) {
       const res = await fetch(`http://127.0.0.1:18155/admin/api/status`, {
         headers: { Authorization: "Bearer test-secret-key" },
       });
       assert.equal(res.status, 200);
     }
 
-    // 61st request should fail with 429
+    // 301st request should fail with 429
     const overflowRes = await fetch(`http://127.0.0.1:18155/admin/api/status`, {
       headers: { Authorization: "Bearer test-secret-key" },
     });

@@ -69,8 +69,8 @@ export class AdminServer {
     }
 
     entry.count += 1;
-    if (entry.count > 60) {
-      return { allowed: false, reason: "Too Many Requests: Rate limit exceeded (60 req/min/IP)" };
+    if (entry.count > 300) {
+      return { allowed: false, reason: "Too Many Requests: Rate limit exceeded (300 req/min/IP)" };
     }
 
     return { allowed: true };
@@ -121,7 +121,7 @@ export class AdminServer {
       return;
     }
 
-    if (!this.config.admin.apiKey) {
+    if (!this.config.admin.apiKey && this.config.admin.authEnabled !== false) {
       logger.warn("COBOT_ADMIN_API_KEY is not set; Admin Web Server will not start.");
       return;
     }
@@ -169,6 +169,9 @@ export class AdminServer {
   }
 
   private authenticate(req: IncomingMessage): boolean {
+    // Open mode: auth disabled via config — allow all requests.
+    if (this.config.admin.authEnabled === false) return true;
+
     const expectedKey = this.config.admin.apiKey;
     if (!expectedKey) return false;
 
@@ -200,6 +203,12 @@ export class AdminServer {
 
     // Require Auth and Rate Limit for API Endpoints
     if (pathname.startsWith("/admin/api/")) {
+      if (pathname === "/admin/api/auth-status") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ authEnabled: this.config.admin.authEnabled }));
+        return;
+      }
+
       const clientIp = this.getClientIp(req);
       const rateCheck = this.checkRateLimit(clientIp);
       if (!rateCheck.allowed) {

@@ -34,6 +34,7 @@ export interface AdminConfig {
   enabled: boolean;
   host: string;
   port: number;
+  authEnabled: boolean;
   apiKey: string;
 }
 
@@ -91,7 +92,7 @@ export interface YamlConfig {
   };
   hermes?: { enabled?: boolean; apiUrl?: string; apiKey?: string };
   approval?: { mode?: ApprovalMode; skipTools?: string[]; timeoutMs?: number; timeoutAction?: "allow" | "deny" };
-  admin?: { enabled?: boolean; host?: string; port?: number; apiKey?: string };
+  admin?: { enabled?: boolean; host?: string; port?: number; authEnabled?: boolean; apiKey?: string };
 }
 
 export function readRawYamlContent(configPath = resolve(process.cwd(), "config.yaml")): string {
@@ -251,6 +252,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
     enabled: (process.env.COBOT_ADMIN_ENABLED ?? (yaml.admin?.enabled ?? true).toString()) === "true",
     host: envStr("COBOT_ADMIN_HOST") ?? yaml.admin?.host ?? "127.0.0.1",
     port: envNum("COBOT_ADMIN_PORT") ?? yaml.admin?.port ?? 8085,
+    authEnabled: yaml.admin?.authEnabled ?? true,
     apiKey: envStr("COBOT_ADMIN_API_KEY") ?? yaml.admin?.apiKey ?? "",
   };
 

@@ -127,12 +127,7 @@ cmd_install() {
   echo "[+] Installing npm dependencies..."
   npm install
 
-  # 3. Test & rebuild native bindings if needed
-  echo "[+] Checking better-sqlite3 native bindings..."
-  if ! node --input-type=module -e "import Database from 'better-sqlite3'; new Database(':memory:');" >/dev/null 2>&1; then
-    echo "[!] SQLite native bindings failed. Rebuilding for current Node.js runtime..."
-    npm rebuild better-sqlite3
-  fi
+
 
   # 4. Typecheck
   echo "[+] Running typecheck..."
@@ -206,6 +201,12 @@ cmd_start() {
   kill_all_cobot || true
 
   export_proxy_env
+
+  # Check & rebuild native bindings if node version changed
+  if ! node --input-type=module -e "import Database from 'better-sqlite3'; new Database(':memory:');" >/dev/null 2>&1; then
+    echo "[!] SQLite native bindings failed or mismatched. Rebuilding for current Node.js runtime..."
+    npm rebuild better-sqlite3
+  fi
 
   # Decide tsx launch mode. COBOT_WATCH=1 → hot-reload (tsx watch), so a Telegram
   # /restart keeps the dev experience. The flag is exported so the spawned bot
