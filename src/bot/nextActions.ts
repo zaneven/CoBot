@@ -3,15 +3,21 @@ import { InlineKeyboard } from "grammy";
 /**
  * "Next-step" suggestions shown as inline buttons under a finished result.
  *
- * The bot infers the user's likely next move *from the final answer itself*
- * (file paths it mentions, error/failure language, test output, shell hints)
- * and always offers a couple of universal follow-ups. Each suggestion is a
- * short label plus a prompt that, when tapped, is fed back to Claude Code as a
- * new interactive message — so the conversation continues in context.
+ * Primary path (model-driven): we ask Claude Code, when we dispatch a task, to
+ * end its final answer with a fixed-format `<next-actions>` block listing 2-4
+ * concrete follow-up steps (`- label | instruction`). We then extract that block
+ * from the response and turn it into buttons. Because the model itself knows the
+ * semantic intent of what it just did, these suggestions are far more accurate
+ * than guessing from keywords.
  *
- * This is intentionally heuristic (no second LLM call) so it is fast, free, and
- * works offline. A model-backed generator can later replace `generateSuggestions`
- * without touching the store / keyboard / callback plumbing below.
+ * Fallback path (heuristic): if a response has no block, we infer next actions
+ * from the answer text (file paths, error/failure language, test output, shell
+ * hints) plus universal follow-ups. Each suggestion is a short label plus a
+ * prompt that, when tapped, is fed back to Claude Code as a new interactive
+ * message — so the conversation continues in context.
+ *
+ * The store / keyboard / callback plumbing below is shared by both paths; only
+ * `buildNextActions` decides which source to use.
  */
 
 export interface SuggestedAction {
@@ -77,6 +83,139 @@ export function generateSuggestions(answer: string, max: number = MAX_SUGGESTION
   for (const u of UNIVERSAL) add(u);
 
   return found.slice(0, Math.max(1, max));
+}
+
+// ── Model-driven path: a <next-actions> block the model is asked to emit ─────
+
+/** Literal tags the model wraps its "next actions" block in. */
+export const NEXT_ACTIONS_OPEN = "<next-actions>";
+export const NEXT_ACTIONS_CLOSE = "</next-actions>";
+
+/**
+ * Appended to every prompt we send to Claude Code. Asks the model to finish its
+ * final answer with a fixed-format `<next-actions>` block listing 2-4 concrete
+ * follow-up steps, each as `- label | instruction`. We then parse that block
+ * into inline buttons. This is more accurate than pure heuristics because the
+ * model itself knows the semantic intent of what it just did.
+ */
+export const NEXT_ACTIONS_DIRECTIVE = `
+
+[指令] 在你最终回答的正文之后，请追加一个原始标签块（不要放进代码块，也不要在正文里提及它），列出 2-4 个用户最可能想继续执行的后续操作。每行一个，用 - 开头；可在标签后用 | 分隔给出点击后要执行的具体指令（不写 | 则默认用标签本身作为指令）。示例（仅演示格式，请按实际情况填写，不要照搬）：
+<next-actions>
+- 排查刚才的报错 | 帮我排查上一步出现的错误并给出修复方案
+- 运行测试 | 运行 npm test 看是否通过
+</next-actions>`;
+
+/** Pull the `<next-actions>…</next-actions>` block out of a model response and
+ *  return the surrounding text with the block removed. When no block is present
+ *  `block` is null and `cleaned` equals the input. Pure + testable. */
+export function extractNextActions(text: string): { cleaned: string; block: string | null } {
+  const start = text.indexOf(NEXT_ACTIONS_OPEN);
+  if (start < 0) return { cleaned: text, block: null };
+  const close = text.indexOf(NEXT_ACTIONS_CLOSE, start);
+  const blockEnd = close >= 0 ? close + NEXT_ACTIONS_CLOSE.length : text.length;
+  const block = text.slice(start, blockEnd);
+  const after = close >= 0 ? text.slice(blockEnd) : "";
+  const cleaned = (text.slice(0, start) + after).replace(/\s+$/, "");
+  return { cleaned, block };
+}
+
+/** Parse the inner lines of a `<next-actions>` block into actions.
+ *  `- label | instruction` or `- label` (instruction defaults to label).
+ *  Bullet (-/*) and leading `N.` numbering are tolerated. Pure + testable. */
+export function parseNextActionsBlock(block: string): SuggestedAction[] {
+  const inner = block.replace(NEXT_ACTIONS_OPEN, "").replace(NEXT_ACTIONS_CLOSE, "");
+  const out: SuggestedAction[] = [];
+  for (const rawLine of inner.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const m = line.match(/^[-*]\s+(.*)$/);
+    const body = m ? (m[1] ?? "").trim() : line.replace(/^\d+[.)]\s*/, "").trim();
+    if (!body) continue;
+    const sep = body.indexOf("|");
+    let label: string;
+    let prompt: string;
+    if (sep >= 0) {
+      label = body.slice(0, sep).trim();
+      prompt = body.slice(sep + 1).trim();
+    } else {
+      label = body;
+      prompt = body;
+    }
+    if (!label) continue;
+    out.push({ label, prompt: prompt || label });
+  }
+  return out;
+}
+
+/** Resolve the next-action buttons for a finished response.
+ *  Primary: parse the model's `<next-actions>` block (semantic, accurate).
+ *  Fallback: heuristic inference from the answer text (always yields ≥1). */
+export function buildNextActions(rawText: string): SuggestedAction[] {
+  const { cleaned, block } = extractNextActions(rawText);
+  if (block) {
+    const parsed = dedupeActions(parseNextActionsBlock(block));
+    if (parsed.length) return parsed.slice(0, Math.max(1, MAX_SUGGESTIONS));
+  }
+  return generateSuggestions(cleaned);
+}
+
+function dedupeActions(actions: SuggestedAction[]): SuggestedAction[] {
+  const seen = new Set<string>();
+  const out: SuggestedAction[] = [];
+  for (const a of actions) {
+    const key = a.prompt.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(a);
+  }
+  return out;
+}
+
+/**
+ * Streaming filter that hides a trailing `<next-actions>` block from the live
+ * ① message. `feed(delta)` returns only the display-safe portion of each delta;
+ * once the opening tag is seen the rest is swallowed. A small tail is held back
+ * until more data arrives (or `finish()`) so a tag split across deltas is never
+ * leaked into chat.
+ */
+export class NextActionsStreamFilter {
+  private raw = "";
+  private pending = "";
+  private forwarded = 0;
+  private openIndex = -1;
+
+  feed(delta: string): string {
+    this.raw += delta;
+    this.pending += delta;
+    if (this.openIndex >= 0) return ""; // inside the block — suppress
+    const idx = this.raw.indexOf(NEXT_ACTIONS_OPEN);
+    if (idx >= 0) {
+      this.openIndex = idx;
+      const fwd = this.raw.slice(0, idx).slice(this.forwarded);
+      this.forwarded = idx;
+      this.pending = "";
+      return fwd;
+    }
+    const holdBack = NEXT_ACTIONS_OPEN.length + 8;
+    if (this.pending.length > holdBack) {
+      const fwd = this.pending.slice(0, this.pending.length - holdBack);
+      this.pending = this.pending.slice(this.pending.length - holdBack);
+      this.forwarded += fwd.length;
+      return fwd;
+    }
+    return "";
+  }
+
+  finish(): { trailing: string; block: string | null } {
+    if (this.openIndex < 0) {
+      const trailing = this.pending;
+      this.forwarded += trailing.length;
+      this.pending = "";
+      return { trailing, block: null };
+    }
+    return { trailing: "", block: this.raw.slice(this.openIndex) };
+  }
 }
 
 /** Extract file paths with an extension from free text (quotes/brackets safe). */

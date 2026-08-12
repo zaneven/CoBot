@@ -9,7 +9,7 @@ import { SilenceIndicator } from "./indicator.js";
 import { sendRichText } from "../util/send.js";
 import { logger } from "../util/logger.js";
 import { approvalManager } from "./approval.js";
-import { generateSuggestions, renderSuggestionKeyboard } from "./nextActions.js";
+import { buildNextActions, renderSuggestionKeyboard, extractNextActions, NextActionsStreamFilter, NEXT_ACTIONS_DIRECTIVE } from "./nextActions.js";
 
 export interface RunOutcome {
   status: "done" | "aborted" | "error";
@@ -100,6 +100,11 @@ async function runTurn(opts: {
   let roundText = ""; // this round's own answer text (reset each round)
   let lastRoundText = ""; // the final round's text, used for ②
 
+  // Streaming filter: hides a trailing <next-actions> block (if the model
+  // emitted one) from the live ① message so it never shows in chat — we turn
+  // that block into buttons instead.
+  const nextFilter = new NextActionsStreamFilter();
+
   /** Build the current round's top-of-message header. `durationMs` omitted while
    *  the round is still streaming (shows "思考中"); pass it at finalize. */
   function roundHeader(durationMs?: number): string {
@@ -146,11 +151,12 @@ async function runTurn(opts: {
           break;
         case "text":
           indicator.activity();
-          // Stream this round's own text straight into ①. We accumulate only
-          // into roundText (this round's slice) — no cross-round accumulation,
-          // so ① never grows into one giant block.
-          roundText += ev.delta;
-          if (currentRound) await currentRound.text(ev.delta);
+          // Stream this round's own text into ①, but suppress any trailing
+          // <next-actions> block the model emitted — we render that as buttons
+          // instead of showing it inline.
+          const disp = nextFilter.feed(ev.delta);
+          roundText += disp;
+          if (currentRound && disp) await currentRound.text(disp);
           break;
         case "thinking":
           // Reasoning in progress — show a progress marker so a long think
@@ -182,8 +188,14 @@ async function runTurn(opts: {
           capturedInputTokens = ev.usage?.inputTokens;
           capturedOutputTokens = ev.usage?.outputTokens;
           capturedContextUsagePct = ev.contextUsagePct;
-          // Close the final round's message with its definitive header. Its text
-          // was already streamed live into the body; capture it as the answer.
+          // Flush any text the filter held back (the tail it kept to avoid
+          // leaking a partial <next-actions> tag), then close the final round's
+          // message. Capture its text as the answer.
+          const tail = nextFilter.finish();
+          if (tail.trailing) {
+            roundText += tail.trailing;
+            if (currentRound) await currentRound.text(tail.trailing);
+          }
           if (currentRound) {
             currentRound.setHeader(roundHeader(Date.now() - roundStartMs));
             lastRoundText = roundText.trim();
@@ -211,7 +223,7 @@ async function runTurn(opts: {
             //    Only send it when it differs from the last ① message — ①
             //    already streams the final round's text live, so a matching ②
             //    would just repeat the same content.
-            const answer = lastRoundText || ev.text.trim();
+            const answer = lastRoundText || extractNextActions(ev.text).cleaned.trim();
             if (shouldSendFinalAnswer(answer, roundText)) {
               const answerStreamer = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
               await answerStreamer.text(answer);
@@ -224,12 +236,12 @@ async function runTurn(opts: {
             if (ev.costUsd) parts.push(`$${ev.costUsd.toFixed(4)}`);
             if (ev.durationMs) parts.push(`${(ev.durationMs / 1000).toFixed(1)}s`);
             await api.sendMessage(chatId, parts.join(" · "));
-            // ④ Suggested next actions — quick buttons under the result. Inferred
-            //    from the final answer (files / errors / tests / commands) plus
-            //    universal follow-ups. Wrapped so a generation hiccup can never
-            //    break the final message already delivered above.
+            // ④ Suggested next actions — quick buttons under the result. Prefers
+            //    the model's own <next-actions> block (semantic, accurate); falls
+            //    back to heuristic inference. Wrapped so a hiccup can never break
+            //    the final message already delivered above.
             try {
-              const suggestions = generateSuggestions(answer);
+              const suggestions = buildNextActions(ev.text);
               if (suggestions.length) {
                 await api.sendMessage(chatId, "💡 建议的下一步操作：", {
                   reply_markup: renderSuggestionKeyboard(suggestions, chatId),
@@ -310,13 +322,18 @@ export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
     return { status: "aborted", sessionId: undefined, tools: [] };
   }
 
+  // Ask Claude Code to end its answer with a <next-actions> block we turn into
+  // buttons. Appended only to what we dispatch — the original prompt stays in
+  // the audit log and queue untouched.
+  const directedPrompt: PromptInput = { ...prompt, text: `${prompt.text}\n${NEXT_ACTIONS_DIRECTIVE}` };
+
   const run = registry.start(chatId, projectPath, sessionId, prompt, displayText);
   const outcome = await runTurn({
     api,
     chatId,
     projectPath,
     sessionId,
-    prompt,
+    prompt: directedPrompt,
     config,
     registry,
     store,
