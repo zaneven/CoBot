@@ -72,7 +72,13 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
     }
   }
 
-  let sawStreamEvent = false;
+  // Concatenation of every text delta we've already yielded (both the live
+  // partial deltas from stream_event AND any tail we recovered from an
+  // `assistant` snapshot), so each canonical assistant text block can be
+  // diffed against what was already streamed — letting us recover any part the
+  // partial deltas missed (e.g. the text AFTER a tool_use, which partials often
+  // omit) WITHOUT ever re-emitting text we already sent.
+  let streamedSoFar = "";
   let done = false;
   let timedOut = false;
   // Round tracking: one agentic turn = one "round" of thinking. Text/thinking
@@ -114,7 +120,7 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
             roundActive = r.roundActive;
             pendingNewRound = r.pendingNewRound;
           }
-          if (mapped.kind === "text") sawStreamEvent = true;
+          if (mapped.kind === "text") streamedSoFar += mapped.delta;
           yield mapped;
           break;
         }
@@ -122,12 +128,23 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
           const content = (msg as { message: { content: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }> } })
             .message.content;
           for (const block of content) {
-            if (block.type === "text" && block.text && !sawStreamEvent) {
-              const r = shouldStartRound({ roundActive, pendingNewRound }, "text");
-              if (r.start) yield { kind: "roundStart" };
-              roundActive = r.roundActive;
-              pendingNewRound = r.pendingNewRound;
-              yield { kind: "text", delta: block.text };
+            if (block.type === "text" && block.text) {
+              // `streamedSoFar` already holds every partial delta we yielded (see
+              // the stream_event branch above). The canonical assistant block may
+              // repeat that text AND carry spans the partials skipped (e.g. the
+              // text AFTER a tool_use). Emit ONLY the genuinely-missing tail so we
+              // never duplicate streamed text, while still recovering any dropped
+              // span. A normal turn where partials already carried everything
+              // yields nothing here.
+              const missing = recoverMissing(streamedSoFar, block.text);
+              if (missing) {
+                const r = shouldStartRound({ roundActive, pendingNewRound }, "text");
+                if (r.start) yield { kind: "roundStart" };
+                roundActive = r.roundActive;
+                pendingNewRound = r.pendingNewRound;
+                yield { kind: "text", delta: missing };
+                streamedSoFar += missing;
+              }
             } else if (block.type === "tool_use") {
               const name = block.name ?? "tool";
               if (block.id) toolNames.set(block.id, name);
@@ -227,6 +244,25 @@ export function buildSdkPrompt(input: PromptInput): string | AsyncIterable<SDKUs
  * the *next* delta starts the following round. Extracted so the boundary logic
  * is unit-testable without mocking the Claude Agent SDK.
  */
+/**
+ * Recover the part of a canonical `assistant` text block that has not yet been
+ * streamed. Returns the missing tail (after the longest suffix of `streamed`
+ * that is also a prefix of `block`), or "" when the block is already fully
+ * covered by what we yielded — so normal turns yield nothing and we never
+ * duplicate streamed text, but text the partial deltas skipped (e.g. the span
+ * after a tool_use) is recovered and re-emitted.
+ */
+export function recoverMissing(streamed: string, block: string): string {
+  if (!block) return "";
+  if (streamed.includes(block)) return ""; // already fully streamed
+  let overlap = 0;
+  const maxK = Math.min(streamed.length, block.length);
+  for (let k = 1; k <= maxK; k++) {
+    if (streamed.slice(streamed.length - k) === block.slice(0, k)) overlap = k;
+  }
+  return block.slice(overlap);
+}
+
 export function shouldStartRound(
   state: { roundActive: boolean; pendingNewRound: boolean },
   kind: "text" | "thinking" | "tool",

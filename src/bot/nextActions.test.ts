@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { InlineKeyboard } from "grammy";
+import { Store } from "../store/db.js";
 import {
   generateSuggestions,
   registerSuggestion,
-  consumeSuggestion,
+  getSuggestion,
   renderSuggestionKeyboard,
   extractNextActions,
   parseNextActionsBlock,
@@ -64,39 +65,40 @@ test("generateSuggestions: respects the max cap and de-duplicates", () => {
   assert.equal(new Set(s.map((a) => a.prompt)).size, s.length, "no duplicate prompts");
 });
 
-// ── store: one-shot registration / consumption ─────────────────────────────
+// ── store: persistent registration / lookup ────────────────────────────────
 
-test("registerSuggestion + consumeSuggestion is one-shot and chat-scoped", () => {
+test("registerSuggestion + getSuggestion is reusable and chat-scoped", () => {
+  const store = new Store(":memory:");
   const action: SuggestedAction = { label: "x", prompt: "do x" };
-  const id = registerSuggestion(42, action);
-  // Wrong chat cannot consume it.
-  assert.equal(consumeSuggestion(99, id), undefined, "different chat rejected");
-  // Correct chat gets it once.
-  const got = consumeSuggestion(42, id);
-  assert.deepEqual(got, action, "correct chat retrieves the action");
-  // Second consume → gone (one-shot).
-  assert.equal(consumeSuggestion(42, id), undefined, "consumed id is gone");
+  const id = registerSuggestion(store, 42, action);
+  // Wrong chat cannot look it up.
+  assert.equal(getSuggestion(store, 99, id), undefined, "different chat rejected");
+  // Correct chat retrieves it — and keeps retrieving it (reusable, not one-shot).
+  assert.deepEqual(getSuggestion(store, 42, id), action, "correct chat retrieves the action");
+  assert.deepEqual(getSuggestion(store, 42, id), action, "id is reusable after a lookup");
 });
 
-test("consumeSuggestion: unknown id returns undefined", () => {
-  assert.equal(consumeSuggestion(1, "nope"), undefined);
+test("getSuggestion: unknown id returns undefined", () => {
+  const store = new Store(":memory:");
+  assert.equal(getSuggestion(store, 1, "nope"), undefined);
 });
 
 // ── keyboard rendering ─────────────────────────────────────────────────────
 
 test("renderSuggestionKeyboard: one button per row, next:<id> callback", () => {
+  const store = new Store(":memory:");
   const actions: SuggestedAction[] = [
     { label: "继续深入", prompt: "p1" },
     { label: "总结要点", prompt: "p2" },
   ];
-  const kb = renderSuggestionKeyboard(actions, 7);
+  const kb = renderSuggestionKeyboard(store, actions, 7);
   const r = rows(kb);
   assert.equal(r.length, 2, "two suggestions → two rows");
   assert.equal(r[0]![0]!.callback_data?.startsWith("next:"), true, "callback_data prefixed next:");
   assert.equal(r[1]![0]!.callback_data?.startsWith("next:"), true);
-  // The registered ids round-trip through consume.
+  // The registered ids round-trip through lookup.
   const id0 = r[0]![0]!.callback_data!.slice("next:".length);
-  assert.deepEqual(consumeSuggestion(7, id0), actions[0], "button id resolves to its action");
+  assert.deepEqual(getSuggestion(store, 7, id0), actions[0], "button id resolves to its action");
 });
 
 // ── model-driven path: <next-actions> block extraction + parsing ───────────

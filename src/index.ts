@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import { loadConfig } from "./config.js";
 import { Store } from "./store/db.js";
 import { Registry } from "./registry/registry.js";
@@ -28,7 +29,9 @@ async function main(): Promise<void> {
   approvalManager.init(store);
   const swept = store.sweepStaleRunning();
   if (swept) logger.warn({ swept }, "marked stale 'running' tasks as aborted (leftover from a crashed run)");
-  const registry = new Registry(store);
+  const registry = new Registry(store, { mediaDir: join(dirname(config.dbPath), "media") });
+  const recovered = store.listAllQueued().length;
+  if (recovered) logger.warn({ recovered }, "recovered queued tasks from a previous run (will run as the chat drains)");
   // /cron is registered inside createBot (CronManager needs bot.api, which only
   // exists once the bot is constructed); here we just (re)schedule saved jobs.
   const { bot, cron: cronManager } = createBot(config, store, registry, proxyAgent);

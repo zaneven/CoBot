@@ -1,4 +1,5 @@
 import { InlineKeyboard } from "grammy";
+import type { Store } from "../store/db.js";
 
 /**
  * "Next-step" suggestions shown as inline buttons under a finished result.
@@ -34,8 +35,6 @@ const UNIVERSAL: SuggestedAction[] = [
 ];
 
 const MAX_SUGGESTIONS = 4;
-/** Suggestions older than this are rejected (the button belongs to a stale run). */
-const TTL_MS = 10 * 60 * 1000;
 
 /**
  * Infer likely next actions from the final answer text.
@@ -234,45 +233,30 @@ function extractFilePaths(text: string): string[] {
   return out;
 }
 
-// ── one-shot store: id → action (per chat, with TTL) ───────────────────────
+// ── persistent store: id → action (per chat, survives restarts) ────────────
 
-interface Stored {
-  chatId: number;
-  action: SuggestedAction;
-  expires: number;
+/** Persist an action and return a short id for the button's callback_data. The
+ *  id is a uuid stored in SQLite, so the button stays tappable across bot
+ *  restarts and never expires on a timer — stale entries are pruned on write. */
+export function registerSuggestion(store: Store, chatId: number, action: SuggestedAction): string {
+  return store.saveNextAction(chatId, action.label, action.prompt);
 }
 
-const store = new Map<string, Stored>();
-let counter = 0;
-
-/** Register an action and return a short id for the button's callback_data. */
-export function registerSuggestion(chatId: number, action: SuggestedAction): string {
-  const id = (++counter).toString(36) + Date.now().toString(36).slice(-4);
-  store.set(id, { chatId, action, expires: Date.now() + TTL_MS });
-  return id;
-}
-
-/**
- * Retrieve and consume a suggestion (one-shot). Returns undefined when the id
- * is unknown, expired, or belongs to a different chat — so a tapped button from
- * a stale/old run safely reports "expired" instead of firing a wrong prompt.
- */
-export function consumeSuggestion(chatId: number, id: string): SuggestedAction | undefined {
-  const s = store.get(id);
-  if (!s) return undefined;
-  // Validate ownership / freshness BEFORE removing, so a probe from the wrong
-  // chat (or an expired id) never deletes a still-valid suggestion.
-  if (s.expires < Date.now() || s.chatId !== chatId) return undefined;
-  store.delete(id);
-  return s.action;
+/** Look up a suggestion (non-destructive — the button stays reusable). Returns
+ *  undefined when the id is unknown or belongs to a different chat, so a tapped
+ *  button from a stale or other-chat run reports gracefully instead of firing a
+ *  wrong prompt. */
+export function getSuggestion(store: Store, chatId: number, id: string): SuggestedAction | undefined {
+  const a = store.getNextAction(chatId, id);
+  return a ? { label: a.label, prompt: a.prompt } : undefined;
 }
 
 /** Build an inline keyboard of `next:<id>` buttons for the given actions.
- *  Each action is registered in the store as its button is rendered. */
-export function renderSuggestionKeyboard(actions: SuggestedAction[], chatId: number): InlineKeyboard {
+ *  Each action is persisted as its button is rendered. */
+export function renderSuggestionKeyboard(store: Store, actions: SuggestedAction[], chatId: number): InlineKeyboard {
   const kb = new InlineKeyboard();
   for (const a of actions) {
-    const id = registerSuggestion(chatId, a);
+    const id = registerSuggestion(store, chatId, a);
     kb.text(truncateLabel(a.label), `next:${id}`).row();
   }
   return kb;

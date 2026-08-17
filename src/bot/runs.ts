@@ -8,8 +8,22 @@ import { TelegramStreamer } from "./streaming.js";
 import { SilenceIndicator } from "./indicator.js";
 import { sendRichText } from "../util/send.js";
 import { logger } from "../util/logger.js";
+import { fmtDuration } from "../util/duration.js";
 import { approvalManager } from "./approval.js";
 import { buildNextActions, renderSuggestionKeyboard, extractNextActions, NextActionsStreamFilter, NEXT_ACTIONS_DIRECTIVE } from "./nextActions.js";
+
+/**
+ * Appended to every dispatched prompt. Asks the model to lay out longer answers
+ * for readability instead of piling prose into one wall of text: blank lines
+ * between paragraphs, **bold** subheadings, and a `---` rule between major
+ * sections. The renderer already maps these to Telegram (horizontal rule, bold,
+ * paragraph breaks), so no risky post-processing is needed — we just shape what
+ * the model emits. Short / code-heavy answers are exempt so we don't force
+ * structure onto trivial replies.
+ */
+const FORMAT_DIRECTIVE = `
+
+[排版] 当你的回答较长（包含多个段落或多个要点）时，请注意排版以提升可读性：用空行分隔不同段落，避免大段文字堆叠在一起；用 **加粗** 作为小节标题；在主要章节之间用单独一行的 --- 分隔。简短的回答或纯代码/命令输出无需强行套用此结构。`;
 
 export interface RunOutcome {
   status: "done" | "aborted" | "error";
@@ -83,33 +97,31 @@ async function runTurn(opts: {
   let capturedOutputTokens: number | undefined;
   let capturedContextUsagePct: number | undefined;
 
-  // ── Multi-message structure (Claude-Code-style) ──────────────────────────
-  // ① Each agentic "round" becomes its own Telegram message: a header line
-  //   (how long it thought + what tools it called) above THAT ROUND'S OWN text
-  //   output, streamed live. Each round shows only its own slice — nothing is
-  //   accumulated across rounds, so the per-round views stay short.
-  // ② We *used* to also send the final round's text as a separate "clean
-  //   answer" message. But ① already streams that exact text live, so doing so
-  //   just duplicated the content. Now ② is only emitted when its text differs
-  //   from the last ① message (see shouldSendFinalAnswer), keeping the final
-  //   answer visible without showing it twice.
-  // ③ Then a done summary (token counts, cost, duration).
-  let currentRound: TelegramStreamer | null = null;
-  let roundStartMs = 0;
-  let roundToolCounts: Record<string, number> = {};
-  let roundText = ""; // this round's own answer text (reset each round)
-  let lastRoundText = ""; // the final round's text, used for ②
+  // ── Single live message (option A) ───────────────────────────────────────
+  // The whole task streams into ONE Telegram message: a header line (how long
+  // it thought + what tools it called) above the full answer body, edited in
+  // place as the model thinks and calls tools. A long agentic task therefore
+  // reads as one continuous reply instead of being sliced into one message per
+  // tool-using turn (which made coherent answers look "truncated mid-sentence").
+  // ② The separate "clean answer" message is gone — the live ① message already
+  //   holds the entire answer, so re-sending it would just duplicate content.
+  // ③ A done summary (token counts, cost, duration) still follows as its own msg.
+  let streamer: TelegramStreamer | null = null;
+  let taskStartMs = 0; // set on the first roundStart; drives the header clock
+  let taskToolCounts: Record<string, number> = {}; // cumulative across the task
 
   // Streaming filter: hides a trailing <next-actions> block (if the model
   // emitted one) from the live ① message so it never shows in chat — we turn
   // that block into buttons instead.
   const nextFilter = new NextActionsStreamFilter();
 
-  /** Build the current round's top-of-message header. `durationMs` omitted while
-   *  the round is still streaming (shows "思考中"); pass it at finalize. */
-  function roundHeader(durationMs?: number): string {
-    const bits: string[] = [`⏱️ 思考 ${durationMs !== undefined ? fmtDuration(durationMs) : "中"}`];
-    const toolS = fmtToolSummary(roundToolCounts);
+  /** Build the task-level top-of-message header: how long the task has been
+   *  running (cumulative) plus the running tool count. Shows "思考 中" until the
+   *  task clock starts on the first roundStart. */
+  function taskHeader(): string {
+    const thinking = taskStartMs ? fmtDuration(Date.now() - taskStartMs) : "中";
+    const bits: string[] = [`⏱️ 思考 ${thinking}`];
+    const toolS = fmtToolSummary(taskToolCounts);
     if (toolS) bits.push(toolS);
     return bits.join(" · ");
   }
@@ -137,46 +149,57 @@ async function runTurn(opts: {
           }
           break;
         case "roundStart":
-          // Close the previous round's message (its text was already streamed
-          // live into the body) and open a fresh one for this round.
-          if (currentRound) {
-            currentRound.setHeader(roundHeader(Date.now() - roundStartMs));
-            await currentRound.finalize();
+          // Single shared message: don't open a fresh streamer per round. The
+          // first round lazily creates the one message we keep editing; later
+          // rounds just keep appending to the same body. Tool counts stay
+          // cumulative for the header; the task clock starts on first round.
+          if (!streamer) {
+            streamer = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
+            streamer.setHeader(taskHeader()); // taskStartMs still 0 → "思考 中"
+            taskStartMs = Date.now();
+          } else {
+            // A new agentic turn begins — start its narration on a fresh line
+            // so per-turn progress beats stack one-per-line (like the Claude
+            // Code client) instead of gluing into one wall of text. No-op for
+            // the first turn (handled above) and on an empty/already-broken
+            // buffer, so it never adds blank stacking.
+            streamer.newline();
           }
-          currentRound = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
-          roundStartMs = Date.now();
-          roundToolCounts = {};
-          roundText = "";
-          currentRound.setHeader(roundHeader());
           break;
         case "text":
           indicator.activity();
-          // Stream this round's own text into ①, but suppress any trailing
-          // <next-actions> block the model emitted — we render that as buttons
-          // instead of showing it inline.
+          // Stream this turn's text into the single live ① message, but suppress
+          // any trailing <next-actions> block the model emitted — we render that
+          // as buttons instead of showing it inline.
           const disp = nextFilter.feed(ev.delta);
-          roundText += disp;
-          if (currentRound && disp) await currentRound.text(disp);
+          if (streamer && disp) await streamer.text(disp);
           break;
         case "thinking":
-          // Reasoning in progress — show a progress marker so a long think
-          // isn't silent, but don't surface the (very long) chain-of-thought in
-          // chat; the answer text is what lands in ①.
-          indicator.thinking();
+          // Reasoning in progress. When the user opts into seeing the model's
+          // chain-of-thought, stream it into the live ① message as a distinct
+          // blockquote (tail-windowed so a long think stays compact) and treat
+          // the deltas as activity so the silence heartbeat stays quiet.
+          // Otherwise just show the transient "💭 Thinking…" progress marker.
+          if (config.telegram.showThinking && streamer) {
+            await streamer.thinking(ev.delta);
+            indicator.activity();
+          } else {
+            indicator.thinking();
+          }
           break;
         case "tool":
           indicator.activity();
           if (!toolsUsed.includes(ev.name)) toolsUsed.push(ev.name);
-          roundToolCounts[ev.name] = (roundToolCounts[ev.name] ?? 0) + 1;
-          // Live-update the round header with the running tool count.
-          if (currentRound) currentRound.setHeader(roundHeader());
-          if (config.telegram.showToolCalls && currentRound) {
-            await currentRound.toolLine(ev.name, ev.summary);
+          taskToolCounts[ev.name] = (taskToolCounts[ev.name] ?? 0) + 1;
+          // Live-update the header with the running (cumulative) tool count.
+          if (streamer) streamer.setHeader(taskHeader());
+          if (config.telegram.showToolCalls && streamer) {
+            await streamer.toolLine(ev.name, ev.summary);
           }
           break;
         case "toolResult":
           indicator.activity();
-          if (config.telegram.showToolCalls && currentRound) await currentRound.toolResult(ev.name, ev.content, ev.isError);
+          if (config.telegram.showToolCalls && streamer) await streamer.toolResult(ev.name, ev.content, ev.isError);
           break;
         case "status":
           if (ev.status === "compacting") indicator.compacting();
@@ -189,18 +212,29 @@ async function runTurn(opts: {
           capturedOutputTokens = ev.usage?.outputTokens;
           capturedContextUsagePct = ev.contextUsagePct;
           // Flush any text the filter held back (the tail it kept to avoid
-          // leaking a partial <next-actions> tag), then close the final round's
-          // message. Capture its text as the answer.
+          // leaking a partial <next-actions> tag), then finalize the single
+          // live message that already holds the whole answer.
           const tail = nextFilter.finish();
           if (tail.trailing) {
-            roundText += tail.trailing;
-            if (currentRound) await currentRound.text(tail.trailing);
+            if (streamer) await streamer.text(tail.trailing);
           }
-          if (currentRound) {
-            currentRound.setHeader(roundHeader(Date.now() - roundStartMs));
-            lastRoundText = roundText.trim();
-            await currentRound.finalize();
-            currentRound = null;
+          // Guarantee the live message ends with the COMPLETE final answer.
+          // The streamed buffer is best-effort: when includePartialMessages is
+          // on, the SDK's text deltas for the last turn don't always cover the
+          // whole turn, so the authoritative full text lives only in `ev.text`
+          // (r.result). If the live body is missing any of it, splice the
+          // remainder in (longest-common-suffix merge, so no duplication) — this
+          // is what prevents the "answer cut off mid-sentence at an inline-code
+          // backtick" symptom that appeared after option A dropped the old
+          // separate clean-answer message.
+          if (streamer && !ev.isError && !ev.aborted && ev.text) {
+            const full = extractNextActions(ev.text).cleaned.trim();
+            if (full) streamer.ensureContains(full);
+          }
+          if (streamer) {
+            streamer.setHeader(taskHeader());
+            await streamer.finalize();
+            streamer = null;
           }
           if (ev.contextUsagePct !== undefined) {
             registry.setContextUsage(chatId, ev.contextUsagePct);
@@ -219,16 +253,9 @@ async function runTurn(opts: {
               abortedReason === "timeout" ? ` (timed out after ${Math.round(config.claude.taskTimeoutMs / 60000)}m)` : "";
             await api.sendMessage(chatId, `⏹ Interrupted${reason}.`);
           } else {
-            // ② Final answer as its own clean message (no per-round header).
-            //    Only send it when it differs from the last ① message — ①
-            //    already streams the final round's text live, so a matching ②
-            //    would just repeat the same content.
-            const answer = lastRoundText || extractNextActions(ev.text).cleaned.trim();
-            if (shouldSendFinalAnswer(answer, roundText)) {
-              const answerStreamer = new TelegramStreamer(api, chatId, config.telegram.maxEditChars, config.telegram.flushMs);
-              await answerStreamer.text(answer);
-              await answerStreamer.finalize();
-            }
+            // ① already streamed the whole answer live into one message, so the
+            //   old separate "clean answer" (②) is no longer needed — re-sending
+            //   it would just duplicate the content.
             // ③ Done summary (original format: token counts included).
             const parts: string[] = ["✅ Done"];
             if (ev.usage) parts.push(`↑${fmtTokens(ev.usage.inputTokens)} ↓${fmtTokens(ev.usage.outputTokens)}`);
@@ -244,7 +271,7 @@ async function runTurn(opts: {
               const suggestions = buildNextActions(ev.text);
               if (suggestions.length) {
                 await api.sendMessage(chatId, "💡 建议的下一步操作：", {
-                  reply_markup: renderSuggestionKeyboard(suggestions, chatId),
+                  reply_markup: renderSuggestionKeyboard(store, suggestions, chatId),
                 });
               }
             } catch (err) {
@@ -254,9 +281,9 @@ async function runTurn(opts: {
           break;
         case "error":
           hadError = true;
-          if (currentRound) {
-            await currentRound.finalize();
-            currentRound = null;
+          if (streamer) {
+            await streamer.finalize();
+            streamer = null;
           }
           await sendRichText(api, chatId, `❌ ${ev.message}`);
           break;
@@ -265,9 +292,9 @@ async function runTurn(opts: {
   } catch (err) {
     hadError = true;
     logger.error({ err: String(err) }, "runTurn error");
-    if (currentRound) {
-      await currentRound.finalize();
-      currentRound = null;
+    if (streamer) {
+      await streamer.finalize();
+      streamer = null;
     }
     await sendRichText(api, chatId, `❌ Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
@@ -322,10 +349,11 @@ export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
     return { status: "aborted", sessionId: undefined, tools: [] };
   }
 
-  // Ask Claude Code to end its answer with a <next-actions> block we turn into
-  // buttons. Appended only to what we dispatch — the original prompt stays in
-  // the audit log and queue untouched.
-  const directedPrompt: PromptInput = { ...prompt, text: `${prompt.text}\n${NEXT_ACTIONS_DIRECTIVE}` };
+  // Append two shaping directives to what we dispatch (the original prompt
+  // stays untouched in the audit log and queue): a layout directive so longer
+  // answers render with paragraphs / headings / rules instead of a wall of
+  // text, and a request to end with a <next-actions> block we turn into buttons.
+  const directedPrompt: PromptInput = { ...prompt, text: `${prompt.text}\n${FORMAT_DIRECTIVE}\n${NEXT_ACTIONS_DIRECTIVE}` };
 
   const run = registry.start(chatId, projectPath, sessionId, prompt, displayText);
   const outcome = await runTurn({
@@ -365,11 +393,34 @@ export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
   return outcome;
 }
 
-/** Pull the next queued prompt for a chat and start it (resolves the binding). */
+/** Pull the next queued prompt for a chat and start it (resolves the binding or
+ *  the cron job the item was queued from). */
 function drainQueued(opts: { api: Api; chatId: number; config: Config; registry: Registry; store: Store }): void {
   const { api, chatId, config, registry, store } = opts;
   const next = registry.dequeue(chatId);
   if (!next) return;
+
+  // Cron-queued item: resume the originating job's session and bump its last_run.
+  if (next.origin === "cron" && next.cronJobId) {
+    const job = store.getCron(next.cronJobId);
+    if (!job) return; // job was deleted while queued; drop silently
+    store.setCronLastRun(job.id, Date.now());
+    void runOne({
+      api,
+      chatId,
+      projectPath: job.projectPath,
+      sessionId: job.claudeSessionId,
+      prompt: next.prompt,
+      displayText: next.displayText,
+      config,
+      registry,
+      store,
+      origin: "cron",
+      onSessionId: (id) => store.setCronSessionId(job.id, id),
+    });
+    return;
+  }
+
   const binding = store.getBinding(chatId);
   if (!binding) {
     void api.sendMessage(chatId, "❌ No project bound - cleared the queue.");
@@ -379,7 +430,7 @@ function drainQueued(opts: { api: Api; chatId: number; config: Config; registry:
   void runOne({
     api,
     chatId,
-    projectPath: binding.projectPath,
+    projectPath: next.projectPath ?? binding.projectPath,
     sessionId: binding.sessionId,
     prompt: next.prompt,
     displayText: next.displayText,
@@ -387,7 +438,7 @@ function drainQueued(opts: { api: Api; chatId: number; config: Config; registry:
     registry,
     store,
     origin: "interactive",
-    onSessionId: next.onSessionId,
+    onSessionId: (id) => store.setSessionId(chatId, id),
   });
 }
 
@@ -424,19 +475,6 @@ export function checkQuota(
     }
   }
   return { ok: true };
-}
-
-/** Format a millisecond duration as a compact Chinese string. */
-function fmtDuration(ms?: number): string {
-  if (ms === undefined || ms < 0) return "";
-  const s = Math.round(ms / 1000);
-  if (s < 60) return `${s}秒`;
-  const m = Math.floor(s / 60);
-  const rs = s % 60;
-  if (m < 60) return rs ? `${m}分${rs}秒` : `${m}分`;
-  const h = Math.floor(m / 60);
-  const rm = m % 60;
-  return rm ? `${h}小时${rm}分` : `${h}小时`;
 }
 
 /** Format tool usage as a compact summary, e.g. "🔧 调用 3 个工具（Bash ×2, Read ×1）". */
@@ -485,7 +523,13 @@ export function submitInteractive(opts: {
 }): void {
   const { api, chatId, prompt, displayText, config, registry, store } = opts;
   if (registry.isActive(chatId)) {
-    const pos = registry.enqueue(chatId, { prompt, displayText, onSessionId: (id) => store.setSessionId(chatId, id) });
+    const binding = store.getBinding(chatId);
+    const pos = registry.enqueue(chatId, {
+      prompt,
+      displayText,
+      projectPath: binding?.projectPath ?? null,
+      origin: "interactive",
+    });
     void api.sendMessage(chatId, `📋 Queued #${pos} (a task is running). /queue to view · /drop to cancel.`);
     return;
   }

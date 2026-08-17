@@ -75,17 +75,36 @@ test("flush is idempotent — no second send if nothing new", async () => {
   assert.equal(api.sent.length, 1, "second flush with no new text should be a no-op");
 });
 
-test("auto-flush when buffer exceeds maxEditChars", async () => {
+test("long content paginates at the 32k limit with no duplication", async () => {
   const api = makeStubApi();
-  const streamer = new TelegramStreamer(api, 1, 10, 0);
-  // The buffer grows > maxEditChars → auto-flushes, resetting the edit target.
-  await streamer.text("1234567890"); // exactly 10 chars
-  await streamer.text("AB");
-  // manual flush collects the leftover sent after flush (2nd message)
-  const s1 = api.sent.length;
-  await streamer.flush();
-  // After auto-flush + this manual flush, at least one send should have happened.
-  assert.ok(api.sent.length >= 1);
+  const streamer = new TelegramStreamer(api, 1, 3500, 50); // flushMs large → no mid-stream flush
+  const unit = "ZQX\n";
+  const big = unit.repeat(11000); // ~44000 chars → overflows one 32k message
+  // Stream in pieces, the way the driver feeds incremental text deltas.
+  for (let i = 0; i < big.length; i += 1000) {
+    await streamer.text(big.slice(i, i + 1000));
+  }
+  // `done` reconciliation: the authoritative full answer is spliced in. With
+  // content never cleared, this must be a no-op (content already contains it).
+  streamer.ensureContains(big);
+  await streamer.finalize();
+
+  assert.equal(api.richSent.length, 2, "content > 32k splits into exactly 2 messages");
+  const allText = api.richSent
+    .map((r: { rich_message: { markdown: string } }) => r.rich_message.markdown)
+    .join("");
+  const markerCount = allText.split("ZQX").length - 1;
+  assert.equal(markerCount, 11000, "the answer appears exactly once — no duplication");
+});
+
+test("small content is not fragmented by maxEditChars (regression: old auto-flush-clear bug)", async () => {
+  const api = makeStubApi();
+  // maxEditChars=10 is now vestigial; 60 chars (< 32k) must stay ONE message,
+  // not be split/cleared the way the old per-maxEditChars auto-flush did.
+  const streamer = new TelegramStreamer(api, 1, 10, 50);
+  await streamer.text("x".repeat(60));
+  await streamer.finalize();
+  assert.equal(api.richSent.length, 1, "small content stays a single message despite a tiny maxEditChars");
 });
 
 test("summary appends a distinct block to the streamed message", async () => {
@@ -113,15 +132,95 @@ test("summary after finalize is a no-op", async () => {
   assert.ok(!api.richSent[0].rich_message.markdown.includes("执行摘要"), "no summary after finalize");
 });
 
-test("thinkingFragment appends to the body like text", async () => {
+test("thinking renders a folded block with duration above the answer body", async () => {
   const api = makeStubApi();
   const streamer = new TelegramStreamer(api, 1, 3500, 0);
   streamer.setHeader("⏱️ 思考 中");
-  await streamer.thinkingFragment("我在分析需求…");
+  await streamer.thinking("Let me analyze the request and weigh the options carefully…");
+  await streamer.text("这是回答正文。");
   await streamer.finalize();
   const out = api.richSent[0].rich_message.markdown;
   assert.ok(out.startsWith("⏱️ 思考 中"), "header at top");
-  assert.ok(out.includes("我在分析需求…"), "thinking fragment preserved in body");
+  // The folded thinking blockquote sits above the answer body.
+  const thinkIdx = out.indexOf("💭 思考过程");
+  const bodyIdx = out.indexOf("这是回答正文。");
+  assert.ok(thinkIdx >= 0, "thinking block labelled");
+  assert.ok(bodyIdx > thinkIdx, "thinking rendered above the answer body");
+  assert.ok(out.includes("详细思考内容已折叠"), "chain-of-thought is folded, not shown");
+  assert.ok(!out.includes("Let me analyze"), "raw reasoning text is NOT dumped into the chat");
+  assert.ok(out.includes("思考用时"), "thinking duration at the end of the block");
+});
+
+test("multiple thinking spans fold into one block with cumulative duration", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  // think → answer → think → answer: two reasoning spans, ONE folded block.
+  await streamer.thinking("first English reasoning span");
+  await streamer.text("中间回答");
+  await streamer.thinking("second English reasoning span");
+  await streamer.text("最终回答");
+  await streamer.finalize();
+  const out = api.richSent[0].rich_message.markdown;
+  const f = out.indexOf("💭 思考过程");
+  assert.ok(f >= 0, "a folded thinking block is present");
+  assert.ok(out.indexOf("💭 思考过程", f + 1) === -1, "one block total, not one per span");
+  assert.ok(!out.includes("first English reasoning span") && !out.includes("second English reasoning span"),
+    "all raw reasoning is folded away");
+  assert.ok(out.includes("思考用时"), "cumulative thinking duration shown");
+  assert.ok(out.includes("中间回答") && out.includes("最终回答"), "answer body intact");
+});
+
+test("no thinking block at all when the turn has no reasoning", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  await streamer.text("直接回答，没有思考。");
+  await streamer.finalize();
+  const out = api.richSent[0].rich_message.markdown;
+  assert.ok(!out.includes("💭 思考过程"), "no thinking block for a non-reasoning turn");
+  assert.ok(out.includes("直接回答"), "answer body present");
+});
+
+// ── newline (per-turn narration break) ────────────────────────────────────
+
+test("newline starts each turn's narration on its own line", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  await streamer.text("第一回合进度说明:");
+  streamer.newline();
+  await streamer.text("第二回合进度说明:");
+  streamer.newline();
+  await streamer.text("第三回合进度说明:");
+  await streamer.finalize();
+  const out = api.richSent[0].rich_message.markdown;
+  assert.ok(
+    out.includes("第一回合进度说明:\n第二回合进度说明:\n第三回合进度说明:"),
+    "each turn's narration on its own line, like the Claude Code client",
+  );
+});
+
+test("newline is a no-op on an empty buffer (first turn has no leading break)", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  streamer.newline();
+  await streamer.text("only turn");
+  await streamer.finalize();
+  const out = api.richSent[0].rich_message.markdown;
+  assert.ok(!out.startsWith("\n"), "no leading newline before the first turn");
+  assert.ok(out.includes("only turn"));
+});
+
+test("newline never stacks blank lines across consecutive calls", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  await streamer.text("turn one");
+  streamer.newline();
+  streamer.newline(); // a turn that produced only thinking, no text, then the next
+  streamer.newline();
+  await streamer.text("turn two");
+  await streamer.finalize();
+  const out = api.richSent[0].rich_message.markdown;
+  assert.ok(out.includes("turn one\nturn two"), "exactly one line break between turns");
+  assert.ok(!out.includes("turn one\n\n\nturn two"), "no blank-line stacking");
 });
 
 // ── tool markers ─────────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
