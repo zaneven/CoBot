@@ -9,7 +9,7 @@ import type { CronManager } from "../scheduler/cron.js";
 import { listProjectSessions, listAllSessions, findSession } from "../claude/sessions.js";
 import { submitInteractive } from "./runs.js";
 import { runBotCtl, tailBotLog, type BotCtlAction } from "./ctl.js";
-import { consumeSuggestion } from "./nextActions.js";
+import { getSuggestion } from "./nextActions.js";
 import { logger } from "../util/logger.js";
 
 /** Single source of truth for the bot's commands. Drives both the Telegram
@@ -846,10 +846,12 @@ export async function handleApproveModeCallback(ctx: Context, store: Store): Pro
 /**
  * Callback for inline `next:<id>` buttons — fire the suggested follow-up action.
  *
- * The id maps to a one-shot suggestion stored per chat (registered when the
- * result message's keyboard was built). Tapping it sends the action's prompt to
- * Claude Code as a new interactive message, continuing the bound project/session.
- * Unknown / expired ids report gracefully instead of firing a stale prompt.
+ * The id maps to a suggestion persisted per chat (registered when the result
+ * message's keyboard was built). Tapping it sends the action's prompt to Claude
+ * Code as a new interactive message, continuing the bound project/session. The
+ * lookup is non-destructive, so the same button stays tappable — it survives bot
+ * restarts and never expires on a timer. Unknown / stale ids report gracefully
+ * instead of firing a wrong prompt.
  */
 export async function handleNextActionCallback(
   ctx: Context,
@@ -866,9 +868,9 @@ export async function handleNextActionCallback(
     return;
   }
   const id = data.slice("next:".length);
-  const action = consumeSuggestion(chatId, id);
+  const action = getSuggestion(deps.store, chatId, id);
   if (!action) {
-    await ctx.answerCallbackQuery({ text: "该建议已过期，请直接输入指令" });
+    await ctx.answerCallbackQuery({ text: "该按钮已失效，请直接输入指令" });
     return;
   }
   await ctx.answerCallbackQuery({ text: "已发送" });
