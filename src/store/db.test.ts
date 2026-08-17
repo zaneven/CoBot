@@ -13,6 +13,8 @@ beforeEach(() => {
   (store as any).db.exec("DELETE FROM cron_jobs");
   (store as any).db.exec("DELETE FROM audit_logs");
   (store as any).db.exec("DELETE FROM approval_rules");
+  (store as any).db.exec("DELETE FROM queued_tasks");
+  (store as any).db.exec("DELETE FROM next_actions");
 });
 
 // ── bindings ──────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
@@ -232,6 +234,86 @@ test("sumCostSince and sumTokensSince respect the time window and chat", () => {
   assert.equal(store.sumCostSince(7, 0), 4); // 1.5 + 2.5
   assert.equal(store.sumCostSince(7, 150), 2.5); // only the later one
   assert.equal(store.sumTokensSince(7, 0), 700); // 150 + 550
+});
+
+// ── queued tasks (persistent task queue) ──〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
+
+test("queued tasks: enqueue, FIFO dequeue, per-chat isolation", () => {
+  store.enqueueTask({ id: "q1", chatId: 1, projectPath: null, prompt: "a", displayText: "a", media: null, origin: "interactive", cronJobId: null, createdAt: 100 });
+  store.enqueueTask({ id: "q2", chatId: 1, projectPath: "/p", prompt: "b", displayText: "b", media: null, origin: "interactive", cronJobId: null, createdAt: 200 });
+  store.enqueueTask({ id: "q3", chatId: 2, projectPath: null, prompt: "c", displayText: "c", media: null, origin: "interactive", cronJobId: null, createdAt: 150 });
+
+  assert.equal(store.queueLength(1), 2);
+  assert.equal(store.queueLength(2), 1);
+
+  const first = store.dequeueTask(1)!;
+  assert.equal(first.prompt, "a");
+  assert.equal(first.id, "q1");
+  assert.equal(store.queueLength(1), 1);
+
+  const second = store.dequeueTask(1)!;
+  assert.equal(second.projectPath, "/p");
+  assert.equal(store.queueLength(1), 0);
+  assert.equal(store.dequeueTask(1), undefined);
+
+  // Chat 2 untouched.
+  assert.equal(store.queueLength(2), 1);
+  assert.equal(store.dequeueTask(2)!.prompt, "c");
+});
+
+test("queued tasks: snapshot ordering, dropQueue, and listAllQueued", () => {
+  store.enqueueTask({ id: "q1", chatId: 1, projectPath: null, prompt: "a", displayText: "a", media: null, origin: "interactive", cronJobId: null, createdAt: 100 });
+  store.enqueueTask({ id: "q2", chatId: 1, projectPath: null, prompt: "b", displayText: "b", media: null, origin: "cron", cronJobId: "cj1", createdAt: 200 });
+
+  const snap = store.queuedTasks(1);
+  assert.deepEqual(snap.map((t) => t.displayText), ["a", "b"]);
+  assert.equal(snap[1]!.origin, "cron");
+  assert.equal(snap[1]!.cronJobId, "cj1");
+
+  assert.equal(store.listAllQueued().length, 2);
+  assert.equal(store.dropQueue(1), 2);
+  assert.equal(store.queueLength(1), 0);
+  assert.equal(store.listAllQueued().length, 0);
+});
+
+// ── next-action buttons (persistent, reusable) ──〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
+
+test("saveNextAction + getNextAction round-trips label/prompt", () => {
+  const id = store.saveNextAction(42, "运行测试", "请运行 npm test");
+  const got = store.getNextAction(42, id);
+  assert.deepEqual(got, { label: "运行测试", prompt: "请运行 npm test" });
+});
+
+test("getNextAction is non-destructive (reusable) and chat-scoped", () => {
+  const id = store.saveNextAction(42, "a", "p");
+  // Reusable: a second lookup still returns the action.
+  assert.ok(store.getNextAction(42, id));
+  assert.ok(store.getNextAction(42, id), "id survives a prior lookup");
+  // Wrong chat is rejected (no cross-chat leakage).
+  assert.equal(store.getNextAction(99, id), undefined);
+  // Unknown id is rejected.
+  assert.equal(store.getNextAction(42, "does-not-exist"), undefined);
+});
+
+test("saveNextAction prunes buttons older than the prune age for that chat", () => {
+  const id = store.saveNextAction(42, "fresh", "p");
+  // Backdate it past the 14-day prune window, then save another to trigger pruning.
+  const old = Date.now() - (Store.NEXT_ACTION_PRUNE_AGE_MS + 1000);
+  (store as any).db.prepare("UPDATE next_actions SET created_at = ? WHERE id = ?").run(old, id);
+  const newId = store.saveNextAction(42, "new", "p2");
+  // The backdated button is gone; the freshly-saved one remains.
+  assert.equal(store.getNextAction(42, id), undefined, "stale button pruned on write");
+  assert.deepEqual(store.getNextAction(42, newId), { label: "new", prompt: "p2" }, "fresh button persisted");
+});
+
+test("dropNextActions clears a chat's buttons and returns the count", () => {
+  store.saveNextAction(1, "a", "p");
+  store.saveNextAction(1, "b", "p");
+  store.saveNextAction(2, "c", "p");
+  const removed = store.dropNextActions(1);
+  assert.equal(removed, 2);
+  // Other chats are untouched.
+  assert.equal(store.dropNextActions(2), 1);
 });
 
 // ── approval mode + always-allow rules ──〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰

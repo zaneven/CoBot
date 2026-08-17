@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { Database as DB } from "better-sqlite3";
 import { logger } from "../util/logger.js";
 
@@ -39,6 +40,40 @@ export interface CronJob {
   enabled: number;
   createdAt: number;
   lastRunAt: number | null;
+}
+
+/**
+ * A prompt waiting in a chat's queue (persisted so it survives restarts).
+ * `media` is a JSON array of `{ kind, mediaType, fileName, path }` pointing at
+ * temp files on disk — Buffers are never serialized into the DB. Origin and
+ * cronJobId let the drainer resume the right cron session when it runs.
+ */
+export interface QueuedTask {
+  id: string;
+  chatId: number;
+  /** Project path captured at enqueue (intent); null = resolve binding on drain. */
+  projectPath: string | null;
+  prompt: string;
+  displayText: string;
+  media: string | null;
+  origin: "interactive" | "cron";
+  cronJobId: string | null;
+  createdAt: number;
+}
+
+/**
+ * A persisted "next-step" suggestion button. Inline `next:<id>` buttons under a
+ * finished result resolve to one of these. Persisted (not in-memory) so a button
+ * stays tappable across bot restarts and never expires on a timer — it is only
+ * pruned after a long age to bound growth. Lookup is non-destructive, so the same
+ * button can be tapped more than once.
+ */
+export interface NextAction {
+  id: string;
+  chatId: number;
+  label: string;
+  prompt: string;
+  createdAt: number;
 }
 
 /** Immutable record of one Claude Code task, for audit and cost accounting. */
@@ -90,6 +125,18 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   last_run_at       INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_running_chat ON running_tasks(chat_id);
+CREATE TABLE IF NOT EXISTS queued_tasks (
+  id           TEXT PRIMARY KEY,
+  chat_id      INTEGER NOT NULL,
+  project_path TEXT,
+  prompt       TEXT NOT NULL,
+  display_text TEXT NOT NULL,
+  media        TEXT,
+  origin       TEXT NOT NULL DEFAULT 'interactive',
+  cron_job_id  TEXT,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_queued_chat ON queued_tasks(chat_id);
 CREATE INDEX IF NOT EXISTS idx_cron_chat ON cron_jobs(chat_id);
 CREATE TABLE IF NOT EXISTS audit_logs (
   id           TEXT PRIMARY KEY,
@@ -114,6 +161,14 @@ CREATE TABLE IF NOT EXISTS approval_rules (
   PRIMARY KEY (chat_id, tool_name)
 );
 CREATE INDEX IF NOT EXISTS idx_approval_chat ON approval_rules(chat_id);
+CREATE TABLE IF NOT EXISTS next_actions (
+  id         TEXT PRIMARY KEY,
+  chat_id    INTEGER NOT NULL,
+  label      TEXT NOT NULL,
+  prompt     TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_next_actions_chat ON next_actions(chat_id);
 `;
 
 /** Add columns introduced after the initial schema, idempotently. Older DB
@@ -300,6 +355,107 @@ export class Store {
     const res = this.db
       .prepare("UPDATE running_tasks SET status = 'aborted', ended_at = ? WHERE status = 'running'")
       .run(Date.now());
+    return res.changes;
+  }
+
+  // ---- queued tasks (persistent task queue) ----
+
+  private mapQueued(r: Record<string, unknown>): QueuedTask {
+    return {
+      id: r.id as string,
+      chatId: r.chat_id as number,
+      projectPath: (r.project_path as string | null) ?? null,
+      prompt: r.prompt as string,
+      displayText: r.display_text as string,
+      media: (r.media as string | null) ?? null,
+      origin: (r.origin as QueuedTask["origin"]) ?? "interactive",
+      cronJobId: (r.cron_job_id as string | null) ?? null,
+      createdAt: r.created_at as number,
+    };
+  }
+
+  enqueueTask(t: QueuedTask): void {
+    this.db
+      .prepare(
+        `INSERT INTO queued_tasks (id, chat_id, project_path, prompt, display_text, media, origin, cron_job_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(t.id, t.chatId, t.projectPath, t.prompt, t.displayText, t.media, t.origin, t.cronJobId, t.createdAt);
+  }
+
+  /** FIFO pop the oldest queued task for a chat, or undefined if none. */
+  dequeueTask(chatId: number): QueuedTask | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM queued_tasks WHERE chat_id = ? ORDER BY created_at, rowid LIMIT 1")
+      .get(chatId) as Record<string, unknown> | undefined;
+    if (!row) return undefined;
+    this.db.prepare("DELETE FROM queued_tasks WHERE id = ?").run(row.id);
+    return this.mapQueued(row);
+  }
+
+  queueLength(chatId: number): number {
+    const r = this.db.prepare("SELECT COUNT(*) AS n FROM queued_tasks WHERE chat_id = ?").get(chatId) as { n: number };
+    return r.n;
+  }
+
+  /** Snapshot of queued tasks for a chat, oldest first (for /queue display). */
+  queuedTasks(chatId: number): QueuedTask[] {
+    const rows = this.db
+      .prepare("SELECT * FROM queued_tasks WHERE chat_id = ? ORDER BY created_at, rowid")
+      .all(chatId) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapQueued(r));
+  }
+
+  /** Drop all queued tasks for a chat; returns how many were removed. */
+  dropQueue(chatId: number): number {
+    const res = this.db.prepare("DELETE FROM queued_tasks WHERE chat_id = ?").run(chatId);
+    return res.changes;
+  }
+
+  /** All queued tasks across every chat (for startup recovery reporting). */
+  listAllQueued(): QueuedTask[] {
+    const rows = this.db.prepare("SELECT * FROM queued_tasks ORDER BY chat_id, created_at, rowid").all() as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapQueued(r));
+  }
+
+  // ---- next-action buttons ----
+
+  /** Next-step buttons older than this are pruned on write (bounds table
+   *  growth; the buttons themselves never expire on a timer). 14 days. */
+  static readonly NEXT_ACTION_PRUNE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+  /** Persist a next-step suggestion button and return its id (for the `next:<id>`
+   *  callback_data). uuid ids stay unique across restarts. Stale buttons for this
+   *  chat are pruned on write so the table can't grow without bound. */
+  saveNextAction(chatId: number, label: string, prompt: string): string {
+    const id = randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare(
+        "INSERT INTO next_actions (id, chat_id, label, prompt, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(id, chatId, label, prompt, now);
+    this.db
+      .prepare("DELETE FROM next_actions WHERE chat_id = ? AND created_at < ?")
+      .run(chatId, now - Store.NEXT_ACTION_PRUNE_AGE_MS);
+    return id;
+  }
+
+  /** Look up a next-step button (non-destructive — it stays tappable after).
+   *  Returns undefined when the id is unknown or belongs to a different chat, so
+   *  a tapped button from a stale or other-chat run reports gracefully instead of
+   *  firing a wrong prompt. */
+  getNextAction(chatId: number, id: string): { label: string; prompt: string } | undefined {
+    const r = this.db
+      .prepare("SELECT chat_id, label, prompt FROM next_actions WHERE id = ?")
+      .get(id) as { chat_id: number; label: string; prompt: string } | undefined;
+    if (!r || r.chat_id !== chatId) return undefined;
+    return { label: r.label, prompt: r.prompt };
+  }
+
+  /** Drop all next-step buttons for a chat; returns how many were removed. */
+  dropNextActions(chatId: number): number {
+    const res = this.db.prepare("DELETE FROM next_actions WHERE chat_id = ?").run(chatId);
     return res.changes;
   }
 
