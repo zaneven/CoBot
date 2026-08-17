@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Store, RunningTask } from "../store/db.js";
 import type { PromptInput } from "../claude/types.js";
+import { persistMedia, loadMedia, removeMediaDir } from "../util/mediaStore.js";
 
 export interface ActiveRun {
   taskId: string;
@@ -13,25 +14,42 @@ export interface ActiveRun {
   displayText: string;
 }
 
-/** A prompt waiting in a chat's queue to run once the active task finishes. */
+/** A prompt to enqueue. `projectPath`/`origin`/`cronJobId` persist intent so the
+ *  drainer can resume the right project/cron session after a restart. */
 export interface QueueItem {
   prompt: PromptInput;
   displayText: string;
-  onSessionId?: (id: string) => void;
+  projectPath?: string | null;
+  origin?: "interactive" | "cron";
+  cronJobId?: string | null;
+}
+
+/** A dequeued queue entry, ready to run (media buffers already read back). */
+export interface Dequeued {
+  taskId: string;
+  prompt: PromptInput;
+  displayText: string;
+  projectPath: string | null;
+  origin: "interactive" | "cron";
+  cronJobId: string | null;
 }
 
 /**
  * Tracks the currently-running Claude Code task per Telegram chat plus a FIFO
  * queue of pending prompts. One active task per chat; further prompts enqueue
- * and drain when the active task finishes. The queue is in-memory only - a
- * process restart drops pending items (the active task is swept to 'aborted' by
- * Store.sweepStaleRunning at startup).
+ * and drain when the active task finishes. The queue is persisted in SQLite
+ * (via Store), so pending items survive a process restart: rows are simply
+ * picked up again on drain. The active task is swept to 'aborted' by
+ * Store.sweepStaleRunning at startup. Registry keeps only runtime state
+ * (AbortController, auto-mode toggles, per-chat context pct).
  */
 export class Registry {
   private active = new Map<number, ActiveRun>();
-  private queues = new Map<number, QueueItem[]>();
 
-  constructor(private store: Store) {}
+  constructor(
+    private store: Store,
+    private opts: { mediaDir?: string } = {},
+  ) {}
 
   isActive(chatId: number): boolean {
     return this.active.has(chatId);
@@ -104,41 +122,56 @@ export class Registry {
     return [...this.active.values()];
   }
 
-  // ---- queue ----
+  // ---- queue (persisted in SQLite via Store) ----
 
-  /** Enqueue a prompt; returns its 1-based position in the queue. */
+  /** Enqueue a prompt; returns its 1-based position in the queue. Media buffers
+   *  are written to temp files and only their paths persisted. */
   enqueue(chatId: number, item: QueueItem): number {
-    const q = this.queues.get(chatId) ?? [];
-    q.push(item);
-    this.queues.set(chatId, q);
-    return q.length;
+    const id = randomUUID();
+    const mediaJson = persistMedia(id, item.prompt.media ?? [], this.opts.mediaDir ?? "");
+    this.store.enqueueTask({
+      id,
+      chatId,
+      projectPath: item.projectPath ?? null,
+      prompt: item.prompt.text,
+      displayText: item.displayText,
+      media: mediaJson,
+      origin: item.origin ?? "interactive",
+      cronJobId: item.cronJobId ?? null,
+      createdAt: Date.now(),
+    });
+    return this.store.queueLength(chatId);
   }
 
-  /** Remove and return the head of the queue, or undefined if empty. */
-  dequeue(chatId: number): QueueItem | undefined {
-    const q = this.queues.get(chatId);
-    if (!q || q.length === 0) return undefined;
-    const item = q.shift()!;
-    if (q.length === 0) this.queues.delete(chatId);
-    return item;
+  /** Remove and return the head of the queue, or undefined if empty. Reads
+   *  media buffers back from disk, then cleans up the temp files. */
+  dequeue(chatId: number): Dequeued | undefined {
+    const task = this.store.dequeueTask(chatId);
+    if (!task) return undefined;
+    const media = loadMedia(task.media, this.opts.mediaDir ?? "");
+    if (task.media) removeMediaDir(task.id, this.opts.mediaDir ?? "");
+    return {
+      taskId: task.id,
+      prompt: { text: task.prompt, ...(media ? { media } : {}) },
+      displayText: task.displayText,
+      projectPath: task.projectPath,
+      origin: task.origin,
+      cronJobId: task.cronJobId,
+    };
   }
 
   queueLength(chatId: number): number {
-    return this.queues.get(chatId)?.length ?? 0;
+    return this.store.queueLength(chatId);
   }
 
   /** Drop the entire queue; returns how many items were removed. */
   dropQueue(chatId: number): number {
-    const q = this.queues.get(chatId);
-    if (!q) return 0;
-    const n = q.length;
-    this.queues.delete(chatId);
-    return n;
+    return this.store.dropQueue(chatId);
   }
 
   /** Snapshot of queued items (for /queue display). Does not mutate. */
-  queuedItems(chatId: number): QueueItem[] {
-    return [...(this.queues.get(chatId) ?? [])];
+  queuedItems(chatId: number): { displayText: string }[] {
+    return this.store.queuedTasks(chatId).map((t) => ({ displayText: t.displayText }));
   }
 
   // ---- auto mode (in-memory, resets on restart) ----

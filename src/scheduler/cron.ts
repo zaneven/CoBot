@@ -107,13 +107,22 @@ export class CronManager {
     if (!job) return;
     const chatId = job.chatId;
 
-    if (this.registry.isActive(chatId)) {
-      await this.api.sendMessage(chatId, `⏭ Cron skipped (a task is already running): ${truncate(job.prompt, 60)}`);
-      return;
-    }
-
     logger.info({ jobId, chatId, schedule: job.schedule }, "cron firing");
     await this.api.sendMessage(chatId, `⏰ Cron (${job.schedule}): ${truncate(job.prompt, 120)}`);
+
+    // If a task is already running, enqueue (persisted); the drainer resumes the
+    // cron session and bumps last_run. Otherwise run directly.
+    if (this.registry.isActive(chatId)) {
+      const pos = this.registry.enqueue(chatId, {
+        prompt: { text: job.prompt },
+        displayText: `[cron] ${truncate(job.prompt, 40)}`,
+        projectPath: job.projectPath,
+        origin: "cron",
+        cronJobId: jobId,
+      });
+      await this.api.sendMessage(chatId, `📋 Queued #${pos} (a task is running).`);
+      return;
+    }
 
     const outcome = await runOne({
       api: this.api,
