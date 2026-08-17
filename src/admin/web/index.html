@@ -813,6 +813,10 @@
               <label for="cfgDailyCost">每日消费上限 <span class="hint">($USD)</span></label>
               <input type="number" step="0.1" id="cfgDailyCost" placeholder="例如 5.0">
             </div>
+            <div class="form-group">
+              <label for="cfgDailyTokenCap">每日 Token 上限 <span class="hint">(dailyTokenCap)</span></label>
+              <input type="number" step="1000" id="cfgDailyTokenCap" placeholder="例如 200000">
+            </div>
           </div>
 
           <div class="form-row">
@@ -825,6 +829,13 @@
               <select id="cfgShowToolCalls">
                 <option value="false">否 (false) - 仅输出最终文本</option>
                 <option value="true">是 (true) - 实时流式 Bash/Read 过程</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="cfgShowThinking">流式输出思考过程</label>
+              <select id="cfgShowThinking">
+                <option value="true">是 (true) - 实时展示模型推理（折叠显示最近部分）</option>
+                <option value="false">否 (false) - 仅显示最终回答</option>
               </select>
             </div>
           </div>
@@ -1100,8 +1111,10 @@
           document.getElementById("cfgAllowedUsers").value = cfg.allowedUsers ? Array.from(cfg.allowedUsers).join("\n") : "";
           document.getElementById("cfgMaxTurns").value = cfg.claude?.maxTurns || "";
           document.getElementById("cfgDailyCost").value = cfg.claude?.dailyCostCapUsd || "";
+          document.getElementById("cfgDailyTokenCap").value = cfg.claude?.dailyTokenCap || "";
           document.getElementById("cfgFlushMs").value = cfg.telegram?.flushMs || 900;
           document.getElementById("cfgShowToolCalls").value = String(cfg.telegram?.showToolCalls || false);
+          document.getElementById("cfgShowThinking").value = String(cfg.telegram?.showThinking ?? true);
           document.getElementById("cfgAuthEnabled").value = String(cfg.admin?.authEnabled ?? true);
           document.getElementById("cfgDevRoots").value = (cfg.devRoots || []).join("\n");
           document.getElementById("cfgProjects").value = (cfg.projects || []).join("\n");
@@ -1120,12 +1133,14 @@
         defaults: {
           maxTurns: Number(document.getElementById("cfgMaxTurns").value) || undefined,
           dailyCostCapUsd: Number(document.getElementById("cfgDailyCost").value) || undefined,
+          dailyTokenCap: Number(document.getElementById("cfgDailyTokenCap").value) || undefined,
         },
         telegram: {
           botToken: document.getElementById("cfgBotToken").value.trim() || undefined,
           allowedUsers: allowedUsersInput.length > 0 ? allowedUsersInput : undefined,
           flushMs: Number(document.getElementById("cfgFlushMs").value) || 900,
           showToolCalls: document.getElementById("cfgShowToolCalls").value === "true",
+          showThinking: document.getElementById("cfgShowThinking").value === "true",
         },
         admin: {
           authEnabled: document.getElementById("cfgAuthEnabled").value === "true",

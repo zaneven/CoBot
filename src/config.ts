@@ -73,6 +73,11 @@ export interface Config {
      *  chat — only the final assistant text is shown. SilenceIndicator still
      *  heartbeats so the user knows work is happening. Default: false. */
     showToolCalls: boolean;
+    /** When true, the model's reasoning/chain-of-thought (thinking deltas from
+     *  reasoning models) is surfaced live in the chat as a distinct blockquote,
+     *  tail-windowed so a long think stays compact. Zero cost on turns that
+     *  produce no thinking. Default: true. */
+    showThinking: boolean;
   };
   hermes: HermesConfig;
   logLevel: string;
@@ -89,6 +94,7 @@ export interface YamlConfig {
     pollTimeout?: number;
     flushMs?: number;
     showToolCalls?: boolean;
+    showThinking?: boolean;
   };
   hermes?: { enabled?: boolean; apiUrl?: string; apiKey?: string };
   approval?: { mode?: ApprovalMode; skipTools?: string[]; timeoutMs?: number; timeoutAction?: "allow" | "deny" };
@@ -283,6 +289,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
       pollTimeout: yaml.telegram?.pollTimeout ?? 30,
       flushMs: yaml.telegram?.flushMs ?? 900,
       showToolCalls: yaml.telegram?.showToolCalls ?? false,
+      showThinking: yaml.telegram?.showThinking ?? true,
     },
     hermes,
     logLevel: process.env.LOG_LEVEL ?? "info",
