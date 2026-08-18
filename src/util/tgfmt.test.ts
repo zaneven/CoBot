@@ -57,6 +57,17 @@ test("blockquote", () => {
   assert.equal(mdToTelegramHtml("> quoted\n> more"), "<blockquote>quoted\nmore</blockquote>");
 });
 
+test("expandable blockquote", () => {
+  assert.equal(
+    mdToTelegramHtml("**>** expandable 1\n**>** expandable 2"),
+    "<blockquote expandable>expandable 1\nexpandable 2</blockquote>",
+  );
+  assert.equal(
+    mdToTelegramHtml(">! tag 1\n>! tag 2"),
+    "<blockquote expandable>tag 1\ntag 2</blockquote>",
+  );
+});
+
 test("fenced code escapes HTML", () => {
   assert.equal(mdToTelegramHtml("```ts\na < b && c > d\n```"), "<pre>a &lt; b &amp;&amp; c &gt; d</pre>");
 });

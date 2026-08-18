@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../store/db.js";
 import { Registry } from "../registry/registry.js";
-import { submitInteractive, shouldSendFinalAnswer } from "./runs.js";
+import { submitInteractive, shouldSendFinalAnswer, isRetryableError, isCorruptedResumeError } from "./runs.js";
 import type { Config } from "../config.js";
 import type { PromptInput } from "../claude/types.js";
 
@@ -132,4 +132,33 @@ test("shouldSendFinalAnswer: sends when there was no ① (empty round body)", ()
 test("shouldSendFinalAnswer: never sends an empty answer", () => {
   assert.equal(shouldSendFinalAnswer("", "some body"), false);
   assert.equal(shouldSendFinalAnswer("   ", ""), false);
+});
+
+// ── isRetryableError ──────────────────────────────────────────────────────────
+
+test("isRetryableError: detects transient thinking/quota/network errors", () => {
+  assert.equal(isRetryableError("undefined is not an object (evaluating 's.thinking.length')"), true);
+  assert.equal(isRetryableError("API Error: Request rejected (429) · You have exceeded quota"), true);
+  assert.equal(isRetryableError("FetchError: request to https://api.anthropic.com failed, reason: socket hang up"), true);
+  assert.equal(isRetryableError("Error: 529 Overloaded"), true);
+  assert.equal(isRetryableError("read ECONNRESET"), true);
+});
+
+test("isRetryableError: returns false for permanent or empty errors", () => {
+  assert.equal(isRetryableError(""), false);
+  assert.equal(isRetryableError("SyntaxError: Unexpected token"), false);
+  assert.equal(isRetryableError("Project path does not exist"), false);
+});
+
+// ── isCorruptedResumeError ────────────────────────────────────────────────────
+
+test("isCorruptedResumeError: detects the missing-thinking 400 from a broken resume", () => {
+  assert.equal(
+    isCorruptedResumeError(
+      "API Error: 400 The request failed because it is missing `messages.content.thinking` parameter. Request id: 0217870140...",
+    ),
+    true,
+  );
+  assert.equal(isCorruptedResumeError(""), false);
+  assert.equal(isCorruptedResumeError("API Error: 429 rate limited"), false);
 });

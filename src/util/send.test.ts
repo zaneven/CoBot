@@ -7,13 +7,21 @@ class StubApi {
   richSent: Array<{ markdown: string }> = [];
   htmlSent: Array<{ text: string; options: any }> = [];
   plainSent: string[] = [];
+  editedMarkup: Array<{ messageId: number; markup: any }> = [];
   failRich = false;
   failHtml = false;
+  failEditMarkup = false;
 
   async sendRichMessage(_chatId: number, rich: any): Promise<{ message_id: number }> {
     if (this.failRich) throw new Error("rich unsupported");
     this.richSent.push({ markdown: rich.markdown });
     return { message_id: 1 };
+  }
+
+  async editMessageReplyMarkup(_chatId: number, messageId: number, _inlineId: string | undefined, other?: any): Promise<boolean> {
+    if (this.failEditMarkup) throw new Error("edit markup unsupported");
+    this.editedMarkup.push({ messageId, markup: other?.reply_markup });
+    return true;
   }
 
   async sendMessage(_chatId: number, text: string, options?: any): Promise<{ message_id: number }> {
@@ -88,4 +96,26 @@ test("sendRichText: falls back to HTML with readable table when Rich is unavaila
   // Flattened but readable: cells joined with ' · ', header bold.
   assert.ok(api.htmlSent[0]!.text.includes("Name"));
   assert.ok(api.htmlSent[0]!.text.includes("Value"));
+});
+
+// ─── reply_markup: sendRichMessage drops it, so attach via editMessageReplyMarkup ───
+
+test("sendRichText: rich message carries no reply_markup; keyboard attached by editMessageReplyMarkup", async () => {
+  const api = new StubApi();
+  const markup = { inline_keyboard: [[{ text: "➡️ 继续", callback_data: "next:abc" }]] };
+  await sendRichText(api as any, 1, "**done**", markup);
+  assert.equal(api.richSent.length, 1);
+  assert.equal(api.editedMarkup.length, 1, "markup attached via edit");
+  assert.equal(api.editedMarkup[0]!.messageId, 1);
+  assert.equal(api.editedMarkup[0]!.markup, markup);
+});
+
+test("sendRichText: separate button message sent when markup can't be attached to the rich message", async () => {
+  const api = new StubApi();
+  api.failEditMarkup = true;
+  const markup = { inline_keyboard: [[{ text: "➡️ 继续", callback_data: "next:abc" }]] };
+  await sendRichText(api as any, 1, "**done**", markup);
+  assert.equal(api.richSent.length, 1, "rich content still rendered");
+  assert.equal(api.plainSent.length, 1, "buttons arrive on their own message");
+  assert.equal(api.plainSent[0], "💡 建议的下一步操作：");
 });

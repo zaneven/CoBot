@@ -16,11 +16,11 @@
     "cobot": "bash scripts/cobot.sh",
     "rebuild:native": "npm rebuild better-sqlite3",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/util/tgfmt.test.ts src/util/send.test.ts src/util/mediaStore.test.ts src/bot/commands.test.ts src/bot/ctl.test.ts src/bot/nextActions.test.ts src/registry/registry.test.ts src/claude/driver.test.ts src/store/db.test.ts src/bot/streaming.test.ts src/bot/media.test.ts src/bot/runs.test.ts src/bot/approval.test.ts src/config.test.ts src/admin/server.test.ts src/admin/config_api.test.ts src/admin/analytics_api.test.ts src/admin/log_control_api.test.ts",
+    "test": "node --import tsx --test src/util/tgfmt.test.ts src/util/send.test.ts src/util/mediaStore.test.ts src/bot/commands.test.ts src/bot/ctl.test.ts src/bot/nextActions.test.ts src/registry/registry.test.ts src/claude/driver.test.ts src/store/db.test.ts src/bot/streaming.test.ts src/bot/dashboard.test.ts src/bot/media.test.ts src/bot/runs.test.ts src/bot/approval.test.ts src/config.test.ts src/admin/server.test.ts src/admin/config_api.test.ts src/admin/analytics_api.test.ts src/admin/log_control_api.test.ts",
     "build": "tsc"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.218",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.233",
     "better-sqlite3": "^13.0.3",
     "dotenv": "^16.4.5",
     "grammy": "^1.30.0",

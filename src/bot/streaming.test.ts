@@ -132,7 +132,7 @@ test("summary after finalize is a no-op", async () => {
   assert.ok(!api.richSent[0].rich_message.markdown.includes("执行摘要"), "no summary after finalize");
 });
 
-test("thinking renders a folded block with duration above the answer body", async () => {
+test("thinking updates header duration and keeps answer body clean", async () => {
   const api = makeStubApi();
   const streamer = new TelegramStreamer(api, 1, 3500, 0);
   streamer.setHeader("⏱️ 思考 中");
@@ -141,43 +141,29 @@ test("thinking renders a folded block with duration above the answer body", asyn
   await streamer.finalize();
   const out = api.richSent[0].rich_message.markdown;
   assert.ok(out.startsWith("⏱️ 思考 中"), "header at top");
-  // The folded thinking blockquote sits above the answer body.
-  const thinkIdx = out.indexOf("💭 思考过程");
-  const bodyIdx = out.indexOf("这是回答正文。");
-  assert.ok(thinkIdx >= 0, "thinking block labelled");
-  assert.ok(bodyIdx > thinkIdx, "thinking rendered above the answer body");
-  assert.ok(out.includes("详细思考内容已折叠"), "chain-of-thought is folded, not shown");
+  assert.ok(out.includes("这是回答正文。"), "body present");
   assert.ok(!out.includes("Let me analyze"), "raw reasoning text is NOT dumped into the chat");
-  assert.ok(out.includes("思考用时"), "thinking duration at the end of the block");
+  assert.ok(!out.includes("详细思考内容已折叠"), "no fake thinking placeholder");
 });
 
-test("multiple thinking spans fold into one block with cumulative duration", async () => {
+test("tool calls and thinking do not pollute the answer body", async () => {
   const api = makeStubApi();
   const streamer = new TelegramStreamer(api, 1, 3500, 0);
-  // think → answer → think → answer: two reasoning spans, ONE folded block.
-  await streamer.thinking("first English reasoning span");
-  await streamer.text("中间回答");
-  await streamer.thinking("second English reasoning span");
-  await streamer.text("最终回答");
+  streamer.setHeader("⚡️ 正在调用 Read (runs.ts) · ⏱️ 5.2s · 🔧 调用 2 个工具");
+  await streamer.thinking("Reasoning about file structure…");
+  await streamer.toolLine("Read", "src/bot/runs.ts");
+  await streamer.toolResult("Read", "file content 200 lines", false);
+  await streamer.toolLine("Bash", "npm test");
+  await streamer.toolResult("Bash", "tests passed", false);
+  await streamer.text("根据代码分析，结果如下：\n- 第一点\n- 第二点");
   await streamer.finalize();
-  const out = api.richSent[0].rich_message.markdown;
-  const f = out.indexOf("💭 思考过程");
-  assert.ok(f >= 0, "a folded thinking block is present");
-  assert.ok(out.indexOf("💭 思考过程", f + 1) === -1, "one block total, not one per span");
-  assert.ok(!out.includes("first English reasoning span") && !out.includes("second English reasoning span"),
-    "all raw reasoning is folded away");
-  assert.ok(out.includes("思考用时"), "cumulative thinking duration shown");
-  assert.ok(out.includes("中间回答") && out.includes("最终回答"), "answer body intact");
-});
 
-test("no thinking block at all when the turn has no reasoning", async () => {
-  const api = makeStubApi();
-  const streamer = new TelegramStreamer(api, 1, 3500, 0);
-  await streamer.text("直接回答，没有思考。");
-  await streamer.finalize();
   const out = api.richSent[0].rich_message.markdown;
-  assert.ok(!out.includes("💭 思考过程"), "no thinking block for a non-reasoning turn");
-  assert.ok(out.includes("直接回答"), "answer body present");
+  assert.ok(out.startsWith("⚡️ 正在调用 Read (runs.ts)"), "header displays clean live status");
+  assert.ok(out.includes("根据代码分析，结果如下："), "body is completely intact");
+  // Body is 100% clean of raw concatenated tool lines and ugly pseudo-quotes
+  assert.ok(!out.includes("↳ **Read**"));
+  assert.ok(!out.includes("🔧 **Read** ›"));
 });
 
 // ── newline (per-turn narration break) ────────────────────────────────────
@@ -225,58 +211,30 @@ test("newline never stacks blank lines across consecutive calls", async () => {
 
 // ── tool markers ─────────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
 
-test("toolBlock appends escaped marker line", async () => {
+test("toolLine does not pollute content buffer", async () => {
   const api = makeStubApi();
   const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  streamer.setHeader("⚡️ 正在调用 Bash");
   await streamer.toolLine("Bash", "ls -la");
+  await streamer.text("回答正文");
   await streamer.flush();
-  // The line includes the associated escape happenings of tool name and summary.
-  assert.ok(api.sent[0].text.includes("Bash"));
-  assert.ok(api.sent[0].text.includes("ls -la"));
+  assert.equal(api.sent.length, 1);
+  assert.ok(api.sent[0].text.includes("正在调用 Bash"));
+  assert.ok(api.sent[0].text.includes("回答正文"));
+  assert.ok(!api.sent[0].text.includes("🔧 **Bash** › ls -la"));
 });
 
-test("toolResult appends escaped summary", async () => {
+test("toolResult does not pollute content buffer", async () => {
   const api = makeStubApi();
   const streamer = new TelegramStreamer(api, 1, 3500, 0);
+  streamer.setHeader("⚡️ 正在调用 grep");
   await streamer.toolResult("grep", "found 3 matches", false);
+  await streamer.text("搜索完成");
   await streamer.flush();
-  assert.ok(api.sent[0].text.includes("found 3 matches"));
-});
-
-// ── header (round meta line) ─────────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
-test("setHeader renders above the body, separated by a blank line", async () => {
-  const api = makeStubApi();
-  const streamer = new TelegramStreamer(api, 1, 3500, 0);
-  streamer.setHeader("⏱️ 思考 中 · 🔧 调用 2 个工具（Bash ×2）");
-  await streamer.text("这是本轮的回复正文。");
-  await streamer.finalize();
-  assert.equal(api.richSent.length, 1, "header + body are one message");
-  const out = api.richSent[0].rich_message.markdown;
-  assert.ok(out.startsWith("⏱️ 思考 中 · 🔧 调用 2 个工具（Bash ×2）"), "header at top");
-  assert.ok(out.includes("本轮的回复正文"), "body preserved");
-  assert.ok(out.includes("（Bash ×2）\n\n这是本轮"), "blank-line gap between header and body");
-});
-
-test("setHeader can update the meta line before finalize", async () => {
-  const api = makeStubApi();
-  const streamer = new TelegramStreamer(api, 1, 3500, 0);
-  streamer.setHeader("⏱️ 思考 中");
-  await streamer.text("正文");
-  streamer.setHeader("⏱️ 思考 1分30秒 · 🔧 调用 1 个工具（Read ×1）");
-  await streamer.finalize();
-  const out = api.richSent[0].rich_message.markdown;
-  assert.ok(out.includes("⏱️ 思考 1分30秒"), "updated duration shown");
-  assert.ok(out.includes("Read ×1"), "updated tool count shown");
-  assert.ok(!out.includes("思考 中"), "stale placeholder gone");
-});
-
-test("error toolResult includes warning marker", async () => {
-  const api = makeStubApi();
-  const streamer = new TelegramStreamer(api, 1, 3500, 0);
-  await streamer.toolResult("Run", "command not found", true);
-  await streamer.flush();
-  const text = api.sent[0].text;
-  assert.ok(text.includes("Run") && text.includes("command not found"));
+  assert.equal(api.sent.length, 1);
+  assert.ok(api.sent[0].text.includes("正在调用 grep"));
+  assert.ok(api.sent[0].text.includes("搜索完成"));
+  assert.ok(!api.sent[0].text.includes("found 3 matches"));
 });
 
 // ── finalize ─────────────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰

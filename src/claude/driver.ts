@@ -184,16 +184,20 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
             modelUsage?: Record<string, ModelUsage>;
           };
           done = true;
-          const isError = r.is_error ?? r.subtype === "error";
+          // Hitting the agentic-turn cap (maxTurns) is a normal, healthy stop -
+          // the session is intact and resumable - not an error to alarm about.
+          const turnsExhausted = isMaxTurnsResult(r.subtype);
+          const isError = !turnsExhausted && ((r.is_error ?? r.subtype === "error") || isSdkResultError(r.result));
           if (isError) {
             logger.error({ subtype: r.subtype, result: r.result, durationMs: r.duration_ms }, "SDK result error");
           }
           const contextUsagePct = computeContextUsagePct(r.modelUsage);
           yield {
             kind: "done",
-            text: r.result ?? "",
+            text: isError && r.result ? formatSdkError(r.result) : (r.result ?? ""),
             isError,
             aborted: false,
+            turnsExhausted,
             costUsd: r.total_cost_usd,
             durationMs: r.duration_ms,
             usage: r.usage ? { inputTokens: r.usage.input_tokens, outputTokens: r.usage.output_tokens } : undefined,
@@ -213,12 +217,42 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
         yield { kind: "done", text: "", isError: false, aborted: true, abortedReason: timedOut ? "timeout" : "user" };
       } else {
         logger.error({ err: String(err) }, "claude query error");
-        yield { kind: "error", message: err instanceof Error ? err.message : String(err) };
+        yield { kind: "error", message: formatSdkError(err instanceof Error ? err.message : String(err)) };
       }
     }
   } finally {
     onFinish();
   }
+}
+
+/** Whether an SDK result ended by exhausting the agentic-turn cap (config
+ *  claude.maxTurns). This is a normal, healthy stop - the session is intact and
+ *  resumable - not a cleanup-with-error terminal state. */
+export function isMaxTurnsResult(subtype: string | undefined): boolean {
+  return subtype === "error_max_turns";
+}
+
+/** Detect if the SDK returned an error in the text result even if subtype was success. */
+function isSdkResultError(text?: string): boolean {
+  if (!text) return false;
+  return (
+    text.includes("s.thinking.length") ||
+    text.includes("Request rejected (429)") ||
+    text.includes("exceeded the monthly usage quota") ||
+    text.startsWith("API Error:")
+  );
+}
+
+/** Format raw SDK / parser errors into clear, actionable messages. */
+function formatSdkError(text: string): string {
+  if (!text) return "执行发生错误";
+  if (text.includes("s.thinking.length")) {
+    return "⚠️ 上游模型服务异常：思考流解析中断（通常由于 API 额度超限 429 或代理服务断开引起）";
+  }
+  if (text.includes("exceeded the monthly usage quota") || text.includes("Request rejected (429)")) {
+    return "⚠️ 上游 API 配额超限 (429)：月度用量已达上限，请检查 API Key 额度或更换 Key";
+  }
+  return text;
 }
 
 /** Cap inlined text-file content so a giant log can't blow the context window. */

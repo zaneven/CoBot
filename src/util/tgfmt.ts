@@ -70,14 +70,20 @@ export function mdToTelegramHtml(input: string): string {
       continue;
     }
 
-    // Blockquote: collect consecutive "> ..." lines.
-    if (/^>/.test(line)) {
+    // Blockquote: collect consecutive "> ...", "**>** ...", or ">! ..." lines.
+    if (/^(>|\*\*>\*\*?|\*\*>\!\*\*?|>!)/.test(line)) {
       const quote: string[] = [];
-      while (i < n && /^>/.test(lines[i]!)) {
-        quote.push(lines[i]!.replace(/^>\s?/, ""));
+      let expandable = false;
+      while (i < n && /^(>|\*\*>\*\*?|\*\*>\!\*\*?|>!)/.test(lines[i]!)) {
+        const cur = lines[i]!;
+        if (/^(\*\*>\!\*\*?|>!|\*\*>\*\*)/.test(cur)) {
+          expandable = true;
+        }
+        quote.push(cur.replace(/^(\*\*>\!\*\*?|\*\*>\*\*?|>!|>)\s?/, ""));
         i++;
       }
-      out.push(`<blockquote>${inline(quote.join("\n"))}</blockquote>`);
+      const tag = expandable ? "<blockquote expandable>" : "<blockquote>";
+      out.push(`${tag}${inline(quote.join("\n"))}</blockquote>`);
       continue;
     }
 

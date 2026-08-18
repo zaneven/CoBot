@@ -169,6 +169,14 @@ CREATE TABLE IF NOT EXISTS next_actions (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_next_actions_chat ON next_actions(chat_id);
+CREATE TABLE IF NOT EXISTS trace_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  audit_id   TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  event_data TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trace_audit ON trace_events(audit_id, created_at);
 `;
 
 /** Add columns introduced after the initial schema, idempotently. Older DB
@@ -178,6 +186,19 @@ function migrate(db: DB): void {
   const cols = db.prepare("PRAGMA table_info(bindings)").all() as { name: string }[];
   if (!cols.some((c) => c.name === "approval_mode")) {
     db.exec("ALTER TABLE bindings ADD COLUMN approval_mode TEXT");
+  }
+  const tableNames = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
+  if (!tableNames.some((t) => t.name === "trace_events")) {
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS trace_events (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        audit_id   TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        event_data TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_trace_audit ON trace_events(audit_id, created_at);`
+    );
   }
 }
 
@@ -457,6 +478,39 @@ export class Store {
   dropNextActions(chatId: number): number {
     const res = this.db.prepare("DELETE FROM next_actions WHERE chat_id = ?").run(chatId);
     return res.changes;
+  }
+
+  // ---- trace events (detailed execution trace for audit) ----
+
+  /** Maximum number of trace events to store per audit log. */
+  static readonly MAX_TRACE_EVENTS = 500;
+
+  /** Insert a batch of trace events for an audit log. */
+  insertTraceEvents(auditId: string, events: Array<{ eventType: string; eventData: string }>): void {
+    if (!events.length) return;
+    const now = Date.now();
+    const insert = this.db.prepare(
+      "INSERT INTO trace_events (audit_id, event_type, event_data, created_at) VALUES (?, ?, ?, ?)"
+    );
+    const tx = this.db.transaction(() => {
+      for (const ev of events) {
+        insert.run(auditId, ev.eventType, ev.eventData, now);
+      }
+    });
+    tx();
+  }
+
+  /** Retrieve all trace events for an audit log, ordered chronologically. */
+  getTraceEvents(auditId: string): Array<{ id: number; eventType: string; eventData: string; createdAt: number }> {
+    const rows = this.db
+      .prepare("SELECT id, event_type, event_data, created_at FROM trace_events WHERE audit_id = ? ORDER BY created_at, id")
+      .all(auditId) as Array<{ id: number; event_type: string; event_data: string; created_at: number }>;
+    return rows.map((r) => ({
+      id: r.id,
+      eventType: r.event_type,
+      eventData: r.event_data,
+      createdAt: r.created_at,
+    }));
   }
 
   // ---- audit log ----

@@ -111,6 +111,12 @@ export function createBot(
   // /projects "新建项目" button.
   bot.callbackQuery("newproj", (ctx) => handleNewProjectClick(ctx));
 
+  // Dashboard [⏹ 中断当前任务] button callback.
+  bot.callbackQuery(/^stop_task:/, async (ctx) => {
+    await ctx.answerCallbackQuery({ text: "正在中断任务…" });
+    await handleStop(ctx, registry);
+  });
+
   // Inline query handler — required for switchInlineCurrent buttons in /skills.
   bot.on("inline_query", async (ctx) => {
     const q = ctx.inlineQuery.query.trim();

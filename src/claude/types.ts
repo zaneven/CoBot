@@ -10,7 +10,7 @@ export type DriverEvent =
   | { kind: "tool"; name: string; summary: string }
   | { kind: "toolResult"; name: string; content: string; isError: boolean }
   | { kind: "status"; status: string }
-  | { kind: "done"; text: string; isError: boolean; aborted: boolean; abortedReason?: "timeout" | "user"; costUsd?: number; durationMs?: number; usage?: { inputTokens: number; outputTokens: number }; contextUsagePct?: number }
+  | { kind: "done"; text: string; isError: boolean; aborted: boolean; abortedReason?: "timeout" | "user"; turnsExhausted?: boolean; costUsd?: number; durationMs?: number; usage?: { inputTokens: number; outputTokens: number }; contextUsagePct?: number }
   | { kind: "error"; message: string };
 
 /** MIME types the Anthropic image content block accepts as base64. */

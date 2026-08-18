@@ -288,8 +288,18 @@ export class AdminServer {
         sessionId: r.sessionId || null,
         displayText: r.displayText,
         queueLength: this.registry.queueLength(r.chatId),
+        narration: this.registry.liveNarration(r.taskId),
       }));
       return json({ activeTasks: activeRuns });
+    }
+
+    // 3b. Live trace of a running task (in-memory; updates as the task runs).
+    if (pathname === "/admin/api/tasks/live-trace" && req.method === "GET") {
+      const id = url.searchParams.get("id");
+      if (!id) return json({ error: "missing id" }, 400);
+      const trace = this.registry.getLiveTrace(id);
+      if (!trace) return json({ error: "no live trace for this task (it may have finished or run on an older process)" }, 404);
+      return json(trace);
     }
 
     // 4. Abort Running Task
@@ -426,6 +436,14 @@ export class AdminServer {
       const audit = this.store.getAuditLogById(id);
       if (!audit) return json({ error: "Audit log not found" }, 404);
       return json({ audit });
+    }
+
+    // 9b. Detailed Execution Trace for an Audit Log
+    if (pathname === "/admin/api/audit/trace" && req.method === "GET") {
+      const id = url.searchParams.get("id");
+      if (!id) return json({ error: "Missing audit id" }, 400);
+      const events = this.store.getTraceEvents(id);
+      return json({ trace: events });
     }
 
     // 10. Dynamic Log Level Management

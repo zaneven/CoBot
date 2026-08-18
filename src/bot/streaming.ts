@@ -37,21 +37,15 @@ interface PhysMsg {
 export class TelegramStreamer {
   /** Optional top-of-message meta line (e.g. "⏱️ 思考 … · 🔧 调用 N 工具"). */
   private header = "";
-  /** Reasoning ("thinking") bookkeeping. The full (often English)
-   *  chain-of-thought is folded away — we only track that thinking is happening
-   *  and for how long, surfacing a compact "💭 思考过程" block (fold note +
-   *  running duration) above the answer body. The per-step progress the user
-   *  actually wants lives in the answer body itself, one turn per line (see
-   *  {@link newline}); reasoning never pollutes it. */
+  /** Reasoning ("thinking") bookkeeping. */
   private thinkingActive = false;
   private thinkingStartMs = 0;
   private thinkingTotalMs = 0;
   private hadThinking = false;
-  /** The complete answer text accumulated across all agentic turns — the
-   *  single source of truth. Never cleared (the old auto-flush that reset this
-   *  was what made `ensureContains` re-append the whole answer and duplicate
-   *  content). Overflow into multiple messages is handled by paginating this
-   *  at the 32k limit, not by discarding what was already streamed. */
+  /** Sequential tool execution steps for the expandable process section. */
+  private toolSteps: Array<{ name: string; summary: string; isError?: boolean }> = [];
+  /** The complete assistant answer text accumulated across all agentic turns — the
+   *  single source of truth. Never polluted with tool logs. */
   private content = "";
   private msgs: PhysMsg[] = [];
   private dirty = false;
@@ -82,6 +76,28 @@ export class TelegramStreamer {
   }
 
   /**
+   * Reset / discard any preamble text and delete premature messages if any were sent.
+   */
+  async reset(): Promise<void> {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    this.dirty = false;
+    this.content = "";
+    while (this.msgs.length > 0) {
+      const m = this.msgs.pop()!;
+      if (m.id !== undefined) {
+        try {
+          await (this.api as any).deleteMessage(this.chatId, m.id);
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+  }
+
+  /**
    * Start the next agentic turn's text on a fresh line. Called at each
    * `roundStart` so per-turn narration beats stack one-per-line (like the
    * Claude Code client) instead of gluing into one wall of text. No-op on an
@@ -97,26 +113,33 @@ export class TelegramStreamer {
     }
   }
 
+  /** Record a tool call step in the expandable process section. */
   toolLine(name: string, summary: string): Promise<void> {
-    return this.text(`\n\n🔧 **${escapeMd(name)}** › ${escapeMd(summary)}`);
+    if (this.finished) return Promise.resolve();
+    this.closeThinking();
+    this.toolSteps.push({ name, summary, isError: false });
+    this.dirty = true;
+    this.schedule();
+    return Promise.resolve();
   }
 
+  /** Record / update a tool execution result in the expandable process section. */
   toolResult(name: string, content: string, isError: boolean): Promise<void> {
-    const mark = isError ? "⚠️" : "↳";
-    return this.text(
-      `\n\n${mark} **${escapeMd(name)}** · ${escapeMd(truncateOneline(content, 400))}`,
-    );
+    if (this.finished) return Promise.resolve();
+    this.closeThinking();
+    const last = [...this.toolSteps].reverse().find((s) => s.name === name);
+    if (last) {
+      last.isError = isError;
+    } else {
+      this.toolSteps.push({ name, summary: truncateOneline(content, 200), isError });
+    }
+    this.dirty = true;
+    this.schedule();
+    return Promise.resolve();
   }
 
   /**
-   * Record a reasoning ("thinking") fragment. The full chain-of-thought is
-   * folded away — only the fact that thinking is happening and its running
-   * duration surface in the "💭 思考过程" blockquote above the answer body.
-   * This breaks the long silence where a 20-minute think is indistinguishable
-   * from a hung task without dumping raw (often English) reasoning into the
-   * chat. The step-by-step progress the user wants comes from the answer body
-   * (each turn's narration, one per line via {@link newline}), not from here.
-   * Kept separate from {@link text} so reasoning never pollutes the answer.
+   * Record a reasoning ("thinking") fragment.
    */
   thinking(delta: string): Promise<void> {
     if (this.finished || !delta) return Promise.resolve();
@@ -132,10 +155,7 @@ export class TelegramStreamer {
 
   /**
    * Close the in-progress thinking span, banking its wall-clock slice into the
-   * running total. Called whenever non-reasoning content arrives (answer text,
-   * a tool call via {@link setHeader}, the run ending) so the duration reflects
-   * only actual thinking time, not the tool execution around it. No-op when no
-   * thinking span is open.
+   * running total.
    */
   private closeThinking(): void {
     if (!this.thinkingActive) return;
@@ -200,15 +220,13 @@ export class TelegramStreamer {
     return this.enqueue(() => this.syncMessages(full));
   }
 
-  /** Compose the full logical message: header, folded thinking block, body. */
+  /** Compose the full logical message: header, body. */
   private render(): string {
-    const sections = [
-      this.renderThinking(),
-      this.content.replace(/\n{3,}/g, "\n\n"),
-    ].filter((s) => s.trim());
-    const body = sections.join("\n\n");
+    const body = this.content.replace(/\n{3,}/g, "\n\n").trim();
     return this.header ? `${this.header}\n\n${body}` : body;
   }
+
+  private finalReplyMarkup: any = undefined;
 
   /**
    * Reconcile the physical message chain against `full`: paginate, grow/trim
@@ -234,39 +252,24 @@ export class TelegramStreamer {
     for (let i = 0; i < chunks.length; i++) {
       const want = chunks[i]!;
       const m = this.msgs[i]!;
+      const isLast = i === chunks.length - 1;
+      const markup = isLast && this.finished ? this.finalReplyMarkup : undefined;
       if (m.id === undefined) {
-        const id = await this.sendStreamMessage(want);
+        const id = await this.sendStreamMessage(want, undefined, markup);
         m.id = id;
         m.text = want;
-      } else if (m.text !== want) {
-        await this.sendStreamMessage(want, m.id);
+      } else if (m.text !== want || markup) {
+        await this.sendStreamMessage(want, m.id, markup);
         m.text = want;
       }
       // else: unchanged frozen chunk — skip the edit entirely.
     }
   }
 
-  /**
-   * Render the thinking blockquote: the full chain-of-thought folded away (a
-   * one-line note says so) and the total thinking time on the last line. Each
-   * line is prefixed with `>` so Telegram draws a bordered quote in both Rich
-   * Message and HTML transports. Returns "" when no thinking happened this run
-   * (non-reasoning turns add nothing to the message).
-   */
-  private renderThinking(): string {
-    if (!this.hadThinking) return "";
-    const live = this.thinkingActive ? Date.now() - this.thinkingStartMs : 0;
-    const totalMs = this.thinkingTotalMs + live;
-    return [
-      "> **💭 思考过程**",
-      "> _…详细思考内容已折叠_",
-      `> _⏱️ 思考用时 ${fmtDuration(totalMs)}_`,
-    ].join("\n");
-  }
-
-  async finalize(): Promise<void> {
+  async finalize(replyMarkup?: any): Promise<void> {
     this.closeThinking();
     this.finished = true;
+    this.finalReplyMarkup = replyMarkup;
     await this.flush();
   }
 
@@ -325,6 +328,7 @@ export class TelegramStreamer {
   private async sendStreamMessage(
     markdown: string,
     msgId?: number,
+    replyMarkup?: any,
   ): Promise<number | undefined> {
     const apiAny = this.api as any;
     const edit = msgId !== undefined;
@@ -335,6 +339,7 @@ export class TelegramStreamer {
         const safe = sanitizeStreamMarkdown(markdown);
         const m = await apiAny.sendRichMessage(this.chatId, {
           markdown: safe,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         });
         this.richMode = true;
         return m.message_id;
@@ -353,11 +358,13 @@ export class TelegramStreamer {
         if (edit) {
           await apiAny.editMessageText(this.chatId, msgId, {
             markdown: safe,
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
           });
           return msgId;
         }
         const m = await apiAny.sendRichMessage(this.chatId, {
           markdown: safe,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         });
         return m.message_id;
       } catch (err) {
@@ -372,7 +379,7 @@ export class TelegramStreamer {
     }
 
     // ── HTML fallback ──────────────────────────────────────────────────
-    return this.sendHtml(markdown, msgId);
+    return this.sendHtml(markdown, msgId, replyMarkup);
   }
 
   // ── HTML transport ─────────────────────────────────────────────────
@@ -380,11 +387,13 @@ export class TelegramStreamer {
   private async sendHtml(
     markdown: string,
     msgId?: number,
+    replyMarkup?: any,
   ): Promise<number | undefined> {
     const html = mdToTelegramHtml(markdown);
     const extra = {
       parse_mode: "HTML" as const,
       link_preview_options: { is_disabled: true },
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     };
     try {
       if (msgId !== undefined) {
@@ -413,7 +422,7 @@ export class TelegramStreamer {
         );
       }
       try {
-        const m = await this.api.sendMessage(this.chatId, markdown);
+        const m = await this.api.sendMessage(this.chatId, markdown, replyMarkup ? { reply_markup: replyMarkup } : undefined);
         return m.message_id;
       } catch (e3) {
         logger.debug({ err: String(e3) }, "plain-text send failed");
