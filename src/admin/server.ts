@@ -6,7 +6,7 @@ import { loadConfig, saveYamlConfig, readRawYamlContent, listDevProjects, type C
 import type { Store } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
 import type { CronManager } from "../scheduler/cron.js";
-import { logger, getLogLevel, setLogLevel } from "../util/logger.js";
+import { logger, getLogLevel, setLogLevel, setLogSink } from "../util/logger.js";
 
 export class HttpError extends Error {
   constructor(public statusCode: number, message: string) {
@@ -129,6 +129,10 @@ export class AdminServer {
     const port = this.config.admin.port;
     const host = this.config.admin.host;
 
+    // Wire the logger's tee into the admin live-log SSE buffer. Strip ANSI
+    // color codes so the web panel shows clean text (the terminal keeps colors).
+    setLogSink((line) => appendAdminLog(line.replace(/\x1b\[[0-9;]*m/g, "")));
+
     this.server = createServer((req, res) => {
       this.handleRequest(req, res).catch((err) => {
         if (err instanceof HttpError) {
@@ -164,6 +168,7 @@ export class AdminServer {
       this.rateLimits.clear();
       this.server.close();
       this.server = null;
+      setLogSink(null);
       logger.info("Admin Web Server stopped");
     }
   }

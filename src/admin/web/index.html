@@ -1534,6 +1534,15 @@
     let currentLogFilter = "";
     let currentLogSearch = "";
     let currentEventSource = null;
+    let logReconnectTimer = null;
+    let logReconnectAttempts = 0;
+    // Debounce rapid filter/search changes so we don't tear down & rebuild the
+    // SSE connection on every keystroke.
+    let logRebuildTimer = null;
+    function scheduleLogRebuild() {
+      if (logRebuildTimer) clearTimeout(logRebuildTimer);
+      logRebuildTimer = setTimeout(() => { logRebuildTimer = null; initLogStream(); }, 400);
+    }
 
     async function fetchLogLevel() {
       if (window.authEnabled && !apiKey && !document.getElementById("apiKeyInput").value) return;
@@ -1566,13 +1575,13 @@
     function setLogFilter(level) {
       currentLogFilter = level;
       updateLogStreamCtx();
-      initLogStream();
+      scheduleLogRebuild();
     }
 
     function applyLogSearch(val) {
       currentLogSearch = val;
       updateLogStreamCtx();
-      initLogStream();
+      scheduleLogRebuild();
     }
 
     function updateLogStreamCtx() {
@@ -1584,7 +1593,10 @@
       document.getElementById("logTerminal").textContent = "";
     }
 
-    // Connect SSE Log Stream with filters using short-lived token
+    // Connect SSE Log Stream with filters using short-lived token. Resilient:
+    // any failure (token fetch network error, SSE drop, server restart) is
+    // treated as transient and retried with backoff instead of dying with a
+    // permanent "Failed to fetch" banner.
     async function initLogStream() {
       if (window.authEnabled && !apiKey && !document.getElementById("apiKeyInput").value) return;
       const term = document.getElementById("logTerminal");
@@ -1592,7 +1604,13 @@
         currentEventSource.close();
         currentEventSource = null;
       }
-      term.textContent = `[System] 连接日志通道 (级别: ${currentLogFilter || 'ALL'}, 过滤: '${currentLogSearch}')...\n`;
+      // A fresh manual reconnect resets the backoff counter.
+      if (!logReconnectTimer) logReconnectAttempts = 0;
+      if (logReconnectTimer) { clearTimeout(logReconnectTimer); logReconnectTimer = null; }
+
+      if (logReconnectAttempts === 0) {
+        term.textContent = `[System] 连接日志通道 (级别: ${currentLogFilter || 'ALL'}, 过滤: '${currentLogSearch}')...\n`;
+      }
 
       try {
         const resp = await fetch("/admin/api/logs/token", {
@@ -1600,7 +1618,8 @@
           headers: getHeaders(),
         });
         if (!resp.ok) {
-          term.textContent += `\n[System] 获取日志 Token 失败 (${resp.status})...\n`;
+          // 401 etc. — a key/auth problem, not transient; don't retry-loop.
+          term.textContent += `\n[System] 获取日志 Token 失败 (${resp.status})。请检查 API Key。\n`;
           return;
         }
         const data = await resp.json();
@@ -1612,22 +1631,41 @@
         if (currentLogSearch) url += `&filter=${encodeURIComponent(currentLogSearch)}`;
 
         currentEventSource = new EventSource(url);
+        currentEventSource.onopen = () => {
+          logReconnectAttempts = 0;
+          if (logReconnectTimer) { clearTimeout(logReconnectTimer); logReconnectTimer = null; }
+        };
         currentEventSource.onmessage = (event) => {
           const data = JSON.parse(event.data);
           term.textContent += data.log + "\n";
           term.scrollTop = term.scrollHeight;
         };
         currentEventSource.onerror = () => {
-          term.textContent += "\n[System] 日志通道断开，正在重连...\n";
           if (currentEventSource) {
             currentEventSource.close();
             currentEventSource = null;
           }
-          setTimeout(initLogStream, 3000);
+          scheduleLogReconnect();
         };
       } catch (e) {
-        term.textContent += "\n[System] 日志通道异常: " + (e.message || e) + "\n";
+        // Network-level fetch failure (e.g. bot was restarting). Schedule a
+        // retry instead of leaving the panel dead on "Failed to fetch".
+        term.textContent += `\n[System] 日志通道暂时不可用 (${e.message || e})，将自动重连...\n`;
+        scheduleLogReconnect();
       }
+    }
+
+    function scheduleLogReconnect() {
+      if (logReconnectTimer) return;
+      logReconnectAttempts++;
+      // Cap at ~30s so a permanently-down server doesn't spin forever.
+      const delay = Math.min(1000 * logReconnectAttempts, 30000);
+      const term = document.getElementById("logTerminal");
+      term.textContent += `[System] ${Math.round(delay/1000)}s 后重连 (第 ${logReconnectAttempts} 次)...\n`;
+      logReconnectTimer = setTimeout(() => {
+        logReconnectTimer = null;
+        initLogStream();
+      }, delay);
     }
 
     async function initAuthStatus() {

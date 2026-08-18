@@ -5,6 +5,7 @@ import http from "node:http";
 import { AdminServer } from "./server.js";
 import { Store } from "../store/db.js";
 import { Registry } from "../registry/registry.js";
+import { logger } from "../util/logger.js";
 import type { Config } from "../config.js";
 
 function makeConfig(port: number): Config {
@@ -156,6 +157,52 @@ test("AdminServer: SSE token generation, validation, one-time use, and expiratio
     // 4. Invalid token should fail with 401
     const invalidRes = await fetch(`http://127.0.0.1:18154/admin/api/logs/stream?token=invalid-token-xyz`);
     assert.equal(invalidRes.status, 401);
+  } finally {
+    server.stop();
+    store.close();
+  }
+});
+
+test("AdminServer: live logs stream to an SSE client (logger → appendAdminLog → SSE)", async () => {
+  const config = makeConfig(18158);
+  const store = new Store(":memory:");
+  const registry = new Registry(store);
+  const server = new AdminServer(config, store, registry);
+  await server.start();
+
+  try {
+    const tokenRes = await fetch(`http://127.0.0.1:18158/admin/api/logs/token`, {
+      method: "POST",
+      headers: { Authorization: "Bearer test-secret-key", "Content-Type": "application/json" },
+    });
+    const { token } = (await tokenRes.json()) as { token: string };
+
+    const marker = "sse-end-to-end-marker-" + Math.random().toString(36).slice(2, 8);
+    await new Promise<void>((resolve, reject) => {
+      const t = setTimeout(() => {
+        req.destroy();
+        reject(new Error("timed out waiting for the log line over SSE"));
+      }, 4000);
+      const req = http.get(
+        `http://127.0.0.1:18158/admin/api/logs/stream?token=${encodeURIComponent(token)}`,
+        (sres) => {
+          assert.equal(sres.statusCode, 200);
+          let buf = "";
+          sres.on("data", (chunk: Buffer) => {
+            buf += chunk.toString();
+            if (buf.includes(marker)) {
+              clearTimeout(t);
+              sres.destroy();
+              req.destroy();
+              resolve();
+            }
+          });
+          // Emit a log line now that the stream is open and registered as a client.
+          logger.info({ src: "server.test" }, marker);
+        },
+      );
+      req.on("error", (e) => { clearTimeout(t); reject(e); });
+    });
   } finally {
     server.stop();
     store.close();
