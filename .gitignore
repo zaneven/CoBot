@@ -6,9 +6,11 @@ out/
 *.tsbuildinfo
 coverage/
 *.tgz
+.nyc_output/
 
 # ── Logs & Runtime Files ──────────────────────────────────────────────────────
 *.log
+*.log*
 logs/
 nohup.out
 *.pid
@@ -21,6 +23,10 @@ data/
 *.db-*
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 
 # ── Environment & Local Configuration ─────────────────────────────────────────
 .env
@@ -29,6 +35,17 @@ data/
 !.env.example
 config.yaml
 !config.example.yaml
+*.local.yaml
+*.local.yml
+*.local.json
+
+# ── Certificates & Keys ───────────────────────────────────────────────────────
+*.pem
+*.key
+*.cert
+*.crt
+*.p12
+*.pfx
 
 # ── Editor & IDE Artifacts ────────────────────────────────────────────────────
 .DS_Store
@@ -40,11 +57,7 @@ ehthumbs.db
 Thumbs.db
 
 .idea/
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
+.vscode/
 *.suo
 *.ntvs*
 *.njsproj
@@ -53,13 +66,30 @@ Thumbs.db
 *.swo
 *~
 
-# ── AI Tools & Agent Local State ─────────────────────────────────────────────
-.workbuddy/
-.claude/*.local.json
-.claude/settings.local.json
-.gemini/
+# ── CI/CD & Platform Configs ──────────────────────────────────────────────────
+.github/
+.gitlab/
+.gitea/
 
-# ── Temporary & Socket Files ──────────────────────────────────────────────────
+# ── AI Tools & Agent Local State ─────────────────────────────────────────────
+.claude/
+.gemini/
+.workbuddy/
+.agents/
+.cursor/
+.windsurf/
+.cline/
+.roo/
+
+# ── Temporary, Cache & Socket Files ───────────────────────────────────────────
 tmp_*.ts
 *.tmp
 *.sock
+temp/
+tmp/
+.cache/
+.turbo/
+.vite/
+.eslintcache
+.prettiercache
+
