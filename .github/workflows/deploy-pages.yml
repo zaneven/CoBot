@@ -1,0 +1,50 @@
+name: Deploy landing page to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/landing.html'
+      - 'docs/assets/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, cancel in-progress ones.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage static site
+        run: |
+          mkdir -p _site
+          # landing.html becomes the site root
+          cp docs/landing.html _site/index.html
+          # carry over any shared assets (logo, etc.) if present
+          if [ -d docs/assets ]; then
+            cp -r docs/assets _site/assets
+          fi
+          # serve the artifact verbatim, no Jekyll pass
+          touch _site/.nojekyll
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
