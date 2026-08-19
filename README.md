@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="./docs/landing.html">Landing page</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="https://zaneven.github.io/CoBot/">Landing page</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="./docs/">Docs</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="#license">License</a>
 </p>

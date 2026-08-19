@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="./docs/landing.html">落地页</a>&nbsp;&nbsp;·&nbsp;&nbsp;
+  <a href="https://zaneven.github.io/CoBot/">落地页</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="./docs/">文档</a>&nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="#开源协议">开源协议</a>
 </p>
