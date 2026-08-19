@@ -83,38 +83,67 @@
   .hero-meta .m{font-family:var(--font-mono);font-size:.76rem;color:var(--text-faint)}
   .hero-meta .m b{color:var(--text-muted);font-weight:500}
 
-  /* ── terminal mockup ── */
-  .device{background:linear-gradient(180deg,var(--panel-bg),var(--bg-2));
-    border:1px solid var(--border-strong);border-radius:16px;overflow:hidden;
-    box-shadow:0 30px 70px rgba(0,0,0,.5),0 0 0 1px rgba(232,163,61,.05)}
-  .device-head{display:flex;align-items:center;gap:.6rem;padding:.7rem 1rem;
-    background:var(--bg-2);border-bottom:1px solid var(--border-color)}
-  .device-head .dots{display:flex;gap:.4rem}
-  .device-head .dots i{width:11px;height:11px;border-radius:50%;display:block}
-  .device-head .dots i:nth-child(1){background:#E4574D66;border:1px solid #E4574D}
-  .device-head .dots i:nth-child(2){background:#E8A33D66;border:1px solid #E8A33D}
-  .device-head .dots i:nth-child(3){background:#5FD38A66;border:1px solid #5FD38A}
-  .device-head .title{font-family:var(--font-mono);font-size:.74rem;color:var(--text-muted);margin:0 auto;padding-right:2.2rem}
-  .device-head .live{display:inline-flex;align-items:center;gap:.4rem;font-family:var(--font-mono);
-    font-size:.6rem;letter-spacing:.12em;text-transform:uppercase;color:var(--danger)}
-  .device-head .live .rec{width:7px;height:7px;border-radius:50%;background:var(--danger);animation:blink 1.4s steps(2,start) infinite}
-  @keyframes blink{0%,100%{opacity:1}50%{opacity:.15}}
-  .chat{padding:1rem 1.1rem;font-family:var(--font-display);display:flex;flex-direction:column;gap:.7rem;min-height:380px}
-  .msg{max-width:86%;padding:.6rem .85rem;border-radius:14px;font-size:.86rem;line-height:1.5}
-  .msg.user{align-self:flex-end;background:linear-gradient(135deg,#1c2a3d,#16202d);border:1px solid var(--border-strong);color:var(--text-main)}
-  .msg.bot{align-self:flex-start;background:rgba(232,163,61,.07);border:1px solid rgba(232,163,61,.22);color:var(--text-main)}
-  .msg.bot .who{font-family:var(--font-mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--primary);display:block;margin-bottom:.3rem}
-  .msg pre{background:var(--terminal-bg);border:1px solid var(--border-color);border-radius:6px;
-    padding:.5rem .6rem;margin:.4rem 0;font-family:var(--font-mono);font-size:.72rem;color:var(--terminal-text);white-space:pre-wrap;overflow:hidden}
-  .msg .typing{display:inline-flex;gap:3px;align-items:center}
-  .msg .typing i{width:5px;height:5px;border-radius:50%;background:var(--primary);animation:typing 1.2s infinite}
-  .msg .typing i:nth-child(2){animation-delay:.2s}
-  .msg .typing i:nth-child(3){animation-delay:.4s}
-  @keyframes typing{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
-  .device-foot{padding:.5rem 1rem;border-top:1px solid var(--border-color);background:var(--bg-2);
-    font-family:var(--font-mono);font-size:.66rem;color:var(--text-faint);display:flex;justify-content:space-between}
-  .cursor{color:var(--terminal-text);animation:cur 1.1s steps(2,start) infinite}
-  @keyframes cur{0%,100%{opacity:1}50%{opacity:0}}
+  /* ── phone / Telegram mockup ── */
+  .phone-wrap{display:flex;justify-content:center;align-items:center}
+  .phone{
+    width:300px;max-width:100%;background:#000;border:2px solid #232a35;border-radius:36px;padding:8px;
+    box-shadow:0 34px 80px rgba(0,0,0,.55),0 0 0 1px rgba(232,163,61,.07);position:relative}
+  /* notch / dynamic island */
+  .phone::before{content:"";position:absolute;top:9px;left:50%;transform:translateX(-50%);
+    width:84px;height:19px;background:#000;border-radius:0 0 14px 14px;z-index:6;box-shadow:inset 0 -1px 0 #1b2230}
+  .screen{background:#0e1621;border-radius:28px;overflow:hidden;display:flex;flex-direction:column;height:524px;position:relative}
+  /* status bar */
+  .sb{display:flex;justify-content:space-between;align-items:center;padding:11px 18px 5px;
+    font-family:var(--font-mono);font-size:.66rem;color:#9ab0c6;font-weight:500}
+  .sb .si{display:inline-flex;gap:5px;align-items:center}
+  .sb .si svg{display:block}
+  /* telegram chat header */
+  .tg-head{display:flex;align-items:center;gap:.45rem;padding:.45rem .55rem .45rem .35rem;background:#17212b;
+    border-bottom:1px solid rgba(255,255,255,.04)}
+  .tg-back{color:#5288c1;background:none;border:none;font-size:1.25rem;line-height:1;padding:0 .15rem}
+  .tg-ava{width:34px;height:34px;border-radius:50%;flex-shrink:0;
+    background:linear-gradient(135deg,#5288c1,#2b5278);
+    display:flex;align-items:center;justify-content:center}
+  .tg-ava svg{width:20px;height:20px;stroke:#fff;fill:none;stroke-width:2}
+  .tg-meta{flex:1;min-width:0;line-height:1.2}
+  .tg-name{color:#fff;font-weight:600;font-size:.86rem;display:flex;align-items:center;gap:.3rem}
+  .tg-bot{font-family:var(--font-mono);font-size:.5rem;letter-spacing:.04em;text-transform:uppercase;
+    color:#fff;background:#3a6ea5;border-radius:3px;padding:.06rem .26rem;font-weight:600}
+  .tg-st{font-size:.62rem;color:#6c8296;display:flex;align-items:center;gap:.25rem}
+  .tg-st .d{width:6px;height:6px;border-radius:50%;background:#4fc785;box-shadow:0 0 5px rgba(79,199,133,.7)}
+  .tg-menu{color:#5288c1;background:none;border:none;font-size:1.1rem;cursor:default;padding:0 .15rem;letter-spacing:1px}
+  /* chat */
+  .tg-chat{flex:1;overflow:hidden;padding:.65rem .55rem .5rem;display:flex;flex-direction:column;gap:.5rem;
+    background:radial-gradient(420px 240px at 82% 8%,rgba(82,136,193,.07),transparent 60%),#0e1621}
+  .tg-msg{max-width:80%;padding:.38rem .55rem .32rem;border-radius:12px;font-size:.76rem;line-height:1.42;
+    position:relative;box-shadow:0 1px 1px rgba(0,0,0,.18)}
+  .tg-in{align-self:flex-start;background:#182533;color:#e9f0f7;border-bottom-left-radius:4px}
+  .tg-out{align-self:flex-end;background:#2b5278;color:#fff;border-bottom-right-radius:4px}
+  .tg-msg .tg-t{font-size:.54rem;color:#7d93a7;float:right;margin:.32rem -.2rem -.08rem .4rem;clear:both}
+  .tg-out .tg-t{color:#a9c8e6}
+  .tg-msg .who{font-family:var(--font-mono);font-size:.5rem;letter-spacing:.08em;text-transform:uppercase;color:#5288c1;
+    display:block;margin-bottom:.2rem}
+  .tg-msg pre{background:#0b1320;border:1px solid #15202e;border-radius:6px;padding:.32rem .42rem;margin:.32rem 0 .2rem;
+    font-family:var(--font-mono);font-size:.6rem;color:#d9a441;white-space:pre-wrap;overflow:hidden}
+  .tg-msg .ok{color:#4fc785;font-size:.68rem;display:inline-flex;align-items:center;gap:.25rem;margin-top:.15rem}
+  .tg-typ{align-self:flex-start;background:#182533;border-radius:12px;border-bottom-left-radius:4px;
+    padding:.48rem .6rem;display:inline-flex;gap:4px;align-items:center;box-shadow:0 1px 1px rgba(0,0,0,.18)}
+  .tg-typ i{width:6px;height:6px;border-radius:50%;background:#7d93a7;animation:tgtyping 1.2s infinite}
+  .tg-typ i:nth-child(2){animation-delay:.2s}
+  .tg-typ i:nth-child(3){animation-delay:.4s}
+  @keyframes tgtyping{0%,60%,100%{opacity:.3;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+  /* input bar */
+  .tg-input{display:flex;align-items:center;gap:.4rem;padding:.4rem .55rem .55rem;background:#17212b;
+    border-top:1px solid rgba(255,255,255,.04)}
+  .tg-ic{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .tg-ic svg{width:18px;height:18px;stroke:#6c8296;fill:none;stroke-width:2}
+  .tg-field{flex:1;background:#0e1621;border:none;border-radius:16px;padding:.42rem .7rem;
+    color:#9ab0c6;font-size:.74rem;font-family:var(--font-display)}
+  .tg-field::placeholder{color:#5d7388}
+  .tg-send{width:34px;height:34px;border-radius:50%;flex-shrink:0;border:none;cursor:default;
+    background:linear-gradient(135deg,#5288c1,#3a6ea5);display:flex;align-items:center;justify-content:center}
+  .tg-send svg{width:16px;height:16px;fill:#fff;stroke:#fff;stroke-width:1.6;stroke-linejoin:round}
+  @media(max-width:560px){.phone{width:280px}.screen{height:490px}}
 
   /* ── sections ── */
   section{padding:4.5rem 0}
@@ -257,31 +286,54 @@
       </div>
     </div>
 
-    <!-- terminal/chat mockup -->
-    <div class="device" aria-hidden="true">
-      <div class="device-head">
-        <span class="dots"><i></i><i></i><i></i></span>
-        <span class="title">CoBot · ~/projects/auth-service</span>
-        <span class="live"><i class="rec"></i><span data-en="live" data-zh="直播">live</span></span>
-      </div>
-      <div class="chat">
-        <div class="msg user" data-en="fix the failing login test in auth.spec.ts" data-zh="修复 auth.spec.ts 里挂掉的登录测试">fix the failing login test in auth.spec.ts</div>
-        <div class="msg bot">
-          <span class="who">Claude Code · streaming</span>
-          <span data-en="Reading the test and source… the assertion expects a 401 but the route returns 302 on bad credentials." data-zh="已读取测试和源码……断言期望 401，但错误凭据时路由返回的是 302。">Reading the test and source… the assertion expects a 401 but the route returns 302 on bad credentials.</span>
-          <pre>auth.spec.ts
+    <!-- phone / Telegram bot mockup -->
+    <div class="phone-wrap" aria-hidden="true">
+      <div class="phone">
+        <div class="screen">
+          <!-- status bar -->
+          <div class="sb">
+            <span>9:41</span>
+            <span class="si">
+              <svg width="17" height="11" viewBox="0 0 17 11" fill="#9ab0c6"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="2.5" width="3" height="8.5" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1" fill-opacity=".4"/></svg>
+              <svg width="15" height="11" viewBox="0 0 16 12" fill="none" stroke="#9ab0c6" stroke-width="1.3" stroke-linecap="round"><path d="M1.4 4C3.2 2.2 5.7 1.2 8 1.2s4.8 1 6.6 2.8"/><path d="M3.8 6.6C5 5.4 6.4 4.8 8 4.8s3 .6 4.2 1.8"/><path d="M6.1 9.1C6.7 8.5 7.3 8.2 8 8.2s1.3.3 1.9.9"/><circle cx="8" cy="10.7" r=".7" fill="#9ab0c6" stroke="none"/></svg>
+              <span>87</span>
+              <svg width="23" height="11" viewBox="0 0 24 11" fill="none"><rect x="1" y="1" width="20" height="9" rx="2.4" stroke="#9ab0c6" stroke-width="1"/><rect x="2.7" y="2.7" width="14" height="5.6" rx="1.3" fill="#9ab0c6"/><rect x="22" y="3.6" width="1.6" height="3.8" rx=".8" fill="#9ab0c6"/></svg>
+            </span>
+          </div>
+          <!-- Telegram chat header -->
+          <div class="tg-head">
+            <span class="tg-back">‹</span>
+            <div class="tg-ava"><svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg></div>
+            <div class="tg-meta">
+              <div class="tg-name">CoBot <span class="tg-bot">bot</span></div>
+              <div class="tg-st"><span class="d"></span><span data-en="online · Claude Code ready" data-zh="在线 · Claude Code 就绪">online · Claude Code ready</span></div>
+            </div>
+            <span class="tg-menu">⋮</span>
+          </div>
+          <!-- chat -->
+          <div class="tg-chat">
+            <div class="tg-msg tg-out">
+              <span data-en="fix the failing login test in auth.spec.ts" data-zh="修一下 auth.spec.ts 里挂掉的登录测试">fix the failing login test in auth.spec.ts</span>
+              <span class="tg-t">9:41</span>
+            </div>
+            <div class="tg-msg tg-in">
+              <span class="who">Claude Code</span>
+              <span data-en="On it — the assertion expects 401 but the route returns 302 on bad creds. Aligning the test." data-zh="收到——断言期望 401，但错误凭据时路由返回 302。正在对齐测试。">On it — the assertion expects 401 but the route returns 302 on bad creds. Aligning the test.</span>
+<pre>auth.spec.ts
 -  expect(res.status).toBe(401)
-+  expect(res.status).toBe(302) <span class="cursor">▊</span></pre>
++  expect(res.status).toBe(302)</pre>
+              <span class="ok">✓ <span data-en="tests pass · 18/18" data-zh="测试通过 · 18/18">tests pass · 18/18</span></span>
+              <span class="tg-t">9:41</span>
+            </div>
+            <div class="tg-typ"><i></i><i></i><i></i></div>
+          </div>
+          <!-- input bar -->
+          <div class="tg-input">
+            <span class="tg-ic"><svg viewBox="0 0 24 24"><path d="M21.4 11l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.6 5.6l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"></path></svg></span>
+            <input class="tg-field" type="text" disabled data-en-placeholder="Message CoBot…" data-zh-placeholder="给 CoBot 发消息…" placeholder="Message CoBot…">
+            <button class="tg-send"><svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8-8-2z"></path></svg></button>
+          </div>
         </div>
-        <div class="msg bot">
-          <span class="who">tool · Bash</span>
-          <span data-en="ran tests — 18 passed" data-zh="已跑测试——18 通过">ran tests — 18 passed</span>
-          <span class="typing"><i></i><i></i><i></i></span>
-        </div>
-      </div>
-      <div class="device-foot">
-        <span data-en="⏱ 1 task queued · FIFO" data-zh="⏱ 1 任务排队 · FIFO">⏱ 1 task queued · FIFO</span>
-        <span data-en="$0.0042 · 312 tokens" data-zh="$0.0042 · 312 tokens">$0.0042 · 312 tokens</span>
       </div>
     </div>
   </div>
@@ -450,6 +502,10 @@
         // support a tiny subset of inline markup (<code>, <b>, <i>) via innerHTML
         if(/[<]/.test(val)) el.innerHTML = val; else el.textContent = val;
       }
+    });
+    document.querySelectorAll('[data-en-placeholder]').forEach(el => {
+      const v = el.getAttribute('data-' + (lang === 'zh' ? 'zh' : 'en') + '-placeholder');
+      if(v !== null) el.setAttribute('placeholder', v);
     });
     document.getElementById('langToggle').textContent = I18N[lang].toggle;
   }
