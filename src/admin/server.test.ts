@@ -26,7 +26,7 @@ function makeConfig(port: number): Config {
     dbPath: ":memory:",
     projects: [resolve("/tmp")],
     devRoots: [],
-    telegram: { maxEditChars: 3500, pollTimeout: 30, flushMs: 900, showToolCalls: false, showThinking: true },
+    telegram: { maxEditChars: 3500, pollTimeout: 30, flushMs: 900 },
     hermes: { enabled: false },
     logLevel: "info",
   };

@@ -15,7 +15,7 @@ CoBot 不是「问答机器人」，而是一个**远程 Agent 操作台**：用
 | Agent 特征 | CoBot 中的体现 |
 | :--- | :--- |
 | 自主工具调用 | 默认 `acceptEdits` 自动批准，可切 `bypassPermissions` 全放行 |
-| 长任务流式执行 | `TelegramStreamer` 增量渲染 + `SilenceIndicator` 心跳 |
+| 长任务流式执行 | `TaskDashboard` 卡片原地刷新 + `SilenceIndicator` 心跳；答案正文 `sendRichText` 收尾投递 |
 | 会话/状态持久化 | SQLite 存 `bindings` / `running_tasks` / `cron_jobs`，可 resume 会话 |
 | 定时自主任务 | `CronManager` 按 cron 触发，跨触发复用同一会话 |
 | 多模态输入 | 图片/PDF/文本文件 → 多模态 content block |
@@ -96,7 +96,7 @@ grammY Bot (bot.ts)
 - `maxTurns` 默认**无上限**，仅 watchdog 兜底；长时间推理 + 大上下文可能爆成本。
 
 ### 4.4 透明度
-- `showToolCalls` 默认 `false`：用户看不到 Agent 究竟在调什么工具，像「黑盒」。
+- 工具调用汇总已在任务卡片无条件显示（`TaskDashboard` 的 `📦 工具调用`），默认透明。历史曾有 `showToolCalls` / `showThinking` 流式开关，随旧 `TelegramStreamer` 架构废弃已移除。
 
 ### 4.5 测试环境缺陷（当前阻断项）
 - `better-sqlite3` 原生模块 ABI 不匹配（编译于 NODE_MODULE_VERSION 141，当前 Node 为 127），导致 `db.test.ts` 与 `runs.test.ts` 共 **4 个**用例 `ERR_DLOPEN_FAILED`。**属构建/环境问题，非逻辑错误**（代码正确）。
@@ -129,7 +129,7 @@ grammY Bot (bot.ts)
 ### P1 —— 治理与可观测
 4. **队列持久化**：pending 也入 SQLite，重启不丢。
 5. **cron 幂等 + 重试 + 超时联动**：fire 前校验会话、失败退避、与 watchdog 对齐。
-6. **默认提高透明度**：`showToolCalls` 默认 `true`（或提供 `/audit` 开关），让用户看见 Agent 动作。
+6. ~~**默认提高透明度**：`showToolCalls` 默认 `true`（或提供 `/audit` 开关）~~ ✅ 已落地：工具调用汇总在任务卡片默认显示（`TaskDashboard`）；旧 `showToolCalls` 开关随流式架构重构已移除。
 7. **命令级权限收敛**：`allowedTools` 默认给出最小工具集，而非全开。
 
 ### P2 —— 扩展与一致性

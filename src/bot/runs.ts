@@ -148,11 +148,14 @@ async function runTurn(opts: {
   }
 
   // Trace events: capture detailed execution events for the admin trace view.
-  const traceEvents: Array<{ eventType: string; eventData: string }> = [];
+  // Each event stamps its own createdAt so the persisted history shows the real
+  // per-event time, not a single batch-insert time (which made every event in
+  // the audit detail modal appear at the same wall-clock moment).
+  const traceEvents: Array<{ eventType: string; eventData: string; createdAt: number }> = [];
   const MAX_TRACE_EVENTS = 500;
   function pushTrace(eventType: string, data: Record<string, unknown>): void {
     if (traceEvents.length >= MAX_TRACE_EVENTS) return;
-    traceEvents.push({ eventType, eventData: JSON.stringify(data) });
+    traceEvents.push({ eventType, eventData: JSON.stringify(data), createdAt: Date.now() });
     // Mirror into the registry's in-memory live buffer so the admin page can
     // show a running task's trace in real time (before it's flushed to the
     // DB at done/error).

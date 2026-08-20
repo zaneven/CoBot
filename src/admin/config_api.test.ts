@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
-import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { AdminServer } from "./server.js";
 import { Store } from "../store/db.js";
 import { Registry } from "../registry/registry.js";
@@ -89,5 +89,45 @@ test("Admin API Phase 1: POST & DELETE /admin/api/bindings for Chat binding mana
   } finally {
     server.stop();
     store.close();
+  }
+});
+
+test("Admin API: taskTimeoutMs persists via defaults and hot-reloads", async () => {
+  cleanup();
+  delete process.env.CLAUDE_TASK_TIMEOUT_MS; // ensure yaml is authoritative
+  writeFileSync(tmpConfigPath, "defaults:\n  taskTimeoutMs: 1200000\n", "utf8");
+
+  const config = loadConfig(tmpConfigPath);
+  config.admin = { enabled: true, host: "127.0.0.1", port: 18092, apiKey: "test-key", authEnabled: true };
+
+  const store = new Store(":memory:");
+  const registry = new Registry(store);
+  const server = new AdminServer(config, store, registry, undefined, tmpConfigPath);
+  server.start();
+
+  try {
+    // GET reflects the yaml-driven timeout (no env override).
+    const getRes = await fetch("http://127.0.0.1:18092/admin/api/config", {
+      headers: { Authorization: "Bearer test-key" },
+    });
+    assert.equal(getRes.status, 200);
+    const getData = await getRes.json() as { config: { claude: { taskTimeoutMs: number } } };
+    assert.equal(getData.config.claude.taskTimeoutMs, 1200000);
+
+    // POST updates it and hot-reloads.
+    const postRes = await fetch("http://127.0.0.1:18092/admin/api/config", {
+      method: "POST",
+      headers: { Authorization: "Bearer test-key", "Content-Type": "application/json" },
+      body: JSON.stringify({ defaults: { taskTimeoutMs: 1800000 } }),
+    });
+    assert.equal(postRes.status, 200);
+    const postData = await postRes.json() as { success: boolean; config: { claude: { taskTimeoutMs: number } } };
+    assert.equal(postData.success, true);
+    assert.equal(postData.config.claude.taskTimeoutMs, 1800000);
+    assert.ok(readFileSync(tmpConfigPath, "utf8").includes("taskTimeoutMs: 1800000"));
+  } finally {
+    server.stop();
+    store.close();
+    cleanup();
   }
 });

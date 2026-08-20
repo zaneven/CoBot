@@ -268,7 +268,6 @@ telegram:
   maxEditChars: 3500           # chars before appending a new chunk message
   pollTimeout: 30              # long-poll timeout (s)
   flushMs: 900                 # ms between streamed edits
-  showToolCalls: false         # stream Bash/Read/Write calls to chat
 
 approval:                      # interactive tool-call approval
   mode: auto                   # auto | interactive

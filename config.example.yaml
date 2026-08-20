@@ -18,7 +18,6 @@ telegram:
   maxEditChars: 3500  # chars before appending a new chunk message
   pollTimeout: 30      # long-poll timeout (seconds)
   flushMs: 900         # ms between streamed edits
-  showToolCalls: false # true = stream Bash/Read/Write tool calls to chat
 
 # Interactive tool-call approval. Override per-chat at runtime with /approve.
 # env: COBOT_APPROVAL_MODE, COBOT_APPROVAL_TIMEOUT_MS, COBOT_APPROVAL_TIMEOUT_ACTION,
@@ -33,6 +32,9 @@ approval:
 defaults:
   # maxTurns: omit → conservative default (DEFAULT_MAX_TURNS = 50).
   # Set a number to cap agentic turns per task; 0 = unlimited (SDK default).
+  # taskTimeoutMs: hard per-task wall-clock timeout in ms before the watchdog
+  # interrupts it. Default 600000 (10 min). Env CLAUDE_TASK_TIMEOUT_MS overrides.
+  # Must be > approval.timeoutMs; adjusted live from the admin panel (in minutes).
   # dailyCostCapUsd / dailyTokenCap: optional per-chat daily ceilings.
   # When exceeded, new tasks are rejected with a notice. Undefined = no cap.
   dailyCostCapUsd: 5.0    # example: $5 per chat per day

@@ -485,8 +485,10 @@ export class Store {
   /** Maximum number of trace events to store per audit log. */
   static readonly MAX_TRACE_EVENTS = 500;
 
-  /** Insert a batch of trace events for an audit log. */
-  insertTraceEvents(auditId: string, events: Array<{ eventType: string; eventData: string }>): void {
+  /** Insert a batch of trace events for an audit log. Each event carries its
+   *  own createdAt (captured when the event actually happened during the run);
+   *  events without one fall back to the batch-insert time. */
+  insertTraceEvents(auditId: string, events: Array<{ eventType: string; eventData: string; createdAt?: number }>): void {
     if (!events.length) return;
     const now = Date.now();
     const insert = this.db.prepare(
@@ -494,7 +496,7 @@ export class Store {
     );
     const tx = this.db.transaction(() => {
       for (const ev of events) {
-        insert.run(auditId, ev.eventType, ev.eventData, now);
+        insert.run(auditId, ev.eventType, ev.eventData, ev.createdAt ?? now);
       }
     });
     tx();

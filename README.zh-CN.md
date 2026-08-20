@@ -264,7 +264,6 @@ telegram:
   maxEditChars: 3500           # 触发新消息追加的字符阈值
   pollTimeout: 30              # 长轮询超时（秒）
   flushMs: 900                 # 流式编辑间隔（毫秒）
-  showToolCalls: false         # 是否把 Bash/Read/Write 调用流式进聊天
 
 approval:                      # 交互式工具调用审批
   mode: auto                   # auto | interactive

@@ -830,6 +830,10 @@
               <input type="number" id="cfgMaxTurns" placeholder="默认 50">
             </div>
             <div class="form-group">
+              <label for="cfgTaskTimeout">单次任务超时 <span class="hint">(分钟, taskTimeoutMs)</span></label>
+              <input type="number" step="1" min="1" id="cfgTaskTimeout" placeholder="默认 10">
+            </div>
+            <div class="form-group">
               <label for="cfgDailyCost">每日消费上限 <span class="hint">($USD)</span></label>
               <input type="number" step="0.1" id="cfgDailyCost" placeholder="例如 5.0">
             </div>
@@ -839,25 +843,9 @@
             </div>
           </div>
 
-          <div class="form-row">
-            <div class="form-group">
-              <label for="cfgFlushMs">流式推送节流时间 <span class="hint">(flushMs)</span></label>
-              <input type="number" id="cfgFlushMs" placeholder="默认 900">
-            </div>
-            <div class="form-group">
-              <label for="cfgShowToolCalls">流式输出 Tool Calls 细节</label>
-              <select id="cfgShowToolCalls">
-                <option value="false">否 (false) - 仅输出最终文本</option>
-                <option value="true">是 (true) - 实时流式 Bash/Read 过程</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="cfgShowThinking">流式输出思考过程</label>
-              <select id="cfgShowThinking">
-                <option value="true">是 (true) - 实时展示模型推理（折叠显示最近部分）</option>
-                <option value="false">否 (false) - 仅显示最终回答</option>
-              </select>
-            </div>
+          <div class="form-group">
+            <label for="cfgFlushMs">流式推送节流时间 <span class="hint">(flushMs)</span></label>
+            <input type="number" id="cfgFlushMs" placeholder="默认 900">
           </div>
 
           <div class="form-group">
@@ -1290,11 +1278,10 @@
           document.getElementById("cfgBotToken").value = cfg.telegramToken || "";
           document.getElementById("cfgAllowedUsers").value = cfg.allowedUsers ? Array.from(cfg.allowedUsers).join("\n") : "";
           document.getElementById("cfgMaxTurns").value = cfg.claude?.maxTurns || "";
+          document.getElementById("cfgTaskTimeout").value = cfg.claude?.taskTimeoutMs ? Math.round(cfg.claude.taskTimeoutMs / 60000) : "";
           document.getElementById("cfgDailyCost").value = cfg.claude?.dailyCostCapUsd || "";
           document.getElementById("cfgDailyTokenCap").value = cfg.claude?.dailyTokenCap || "";
           document.getElementById("cfgFlushMs").value = cfg.telegram?.flushMs || 900;
-          document.getElementById("cfgShowToolCalls").value = String(cfg.telegram?.showToolCalls || false);
-          document.getElementById("cfgShowThinking").value = String(cfg.telegram?.showThinking ?? true);
           document.getElementById("cfgAuthEnabled").value = String(cfg.admin?.authEnabled ?? true);
           document.getElementById("cfgDevRoots").value = (cfg.devRoots || []).join("\n");
           document.getElementById("cfgProjects").value = (cfg.projects || []).join("\n");
@@ -1312,6 +1299,7 @@
       const updates = {
         defaults: {
           maxTurns: Number(document.getElementById("cfgMaxTurns").value) || undefined,
+          taskTimeoutMs: Number(document.getElementById("cfgTaskTimeout").value) * 60000 || undefined,
           dailyCostCapUsd: Number(document.getElementById("cfgDailyCost").value) || undefined,
           dailyTokenCap: Number(document.getElementById("cfgDailyTokenCap").value) || undefined,
         },
@@ -1319,8 +1307,6 @@
           botToken: document.getElementById("cfgBotToken").value.trim() || undefined,
           allowedUsers: allowedUsersInput.length > 0 ? allowedUsersInput : undefined,
           flushMs: Number(document.getElementById("cfgFlushMs").value) || 900,
-          showToolCalls: document.getElementById("cfgShowToolCalls").value === "true",
-          showThinking: document.getElementById("cfgShowThinking").value === "true",
         },
         admin: {
           authEnabled: document.getElementById("cfgAuthEnabled").value === "true",

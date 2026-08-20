@@ -12,6 +12,7 @@ beforeEach(() => {
   (store as any).db.exec("DELETE FROM running_tasks");
   (store as any).db.exec("DELETE FROM cron_jobs");
   (store as any).db.exec("DELETE FROM audit_logs");
+  (store as any).db.exec("DELETE FROM trace_events");
   (store as any).db.exec("DELETE FROM approval_rules");
   (store as any).db.exec("DELETE FROM queued_tasks");
   (store as any).db.exec("DELETE FROM next_actions");
@@ -361,4 +362,47 @@ test("always-allow rules are scoped per chat", () => {
   store.addAlwaysAllow(1, "Bash");
   assert.equal(store.isAlwaysAllowed(2, "Bash"), false);
   assert.equal(store.clearAlwaysAllow(2), 0, "chat 2 has no rules");
+});
+
+test("insertTraceEvents preserves each event's own createdAt (not a single batch time)", () => {
+  store.insertAudit({
+    id: "audit-trace-1", chatId: 1, sessionId: null, prompt: "p",
+    tools: "[]", status: "done", costUsd: null, durationMs: null,
+    inputTokens: null, outputTokens: null, contextUsagePct: null,
+    startedAt: 1000, endedAt: 4000,
+  });
+  // Three events that happened at distinct wall-clock moments during the run.
+  store.insertTraceEvents("audit-trace-1", [
+    { eventType: "init", eventData: "{}", createdAt: 1000 },
+    { eventType: "tool", eventData: '{"name":"Bash"}', createdAt: 2500 },
+    { eventType: "text", eventData: '{"content":"done"}', createdAt: 3900 },
+  ]);
+
+  const events = store.getTraceEvents("audit-trace-1");
+  assert.equal(events.length, 3);
+  // Each event keeps the timestamp it was captured at — the bug was that every
+  // event shared the batch-insert time, collapsing the timeline.
+  assert.deepEqual(events.map((e) => e.createdAt), [1000, 2500, 3900]);
+});
+
+test("insertTraceEvents falls back to batch-insert time when createdAt is absent", () => {
+  store.insertAudit({
+    id: "audit-trace-2", chatId: 1, sessionId: null, prompt: "p",
+    tools: "[]", status: "done", costUsd: null, durationMs: null,
+    inputTokens: null, outputTokens: null, contextUsagePct: null,
+    startedAt: 1000, endedAt: 2000,
+  });
+  const before = Date.now();
+  store.insertTraceEvents("audit-trace-2", [
+    { eventType: "init", eventData: "{}" },
+    { eventType: "tool", eventData: "{}" },
+  ]);
+  const events = store.getTraceEvents("audit-trace-2");
+  assert.equal(events.length, 2);
+  const [first, second] = events;
+  assert.ok(first);
+  assert.ok(second);
+  // Both fall back to ~now, and stay within the bracket around the insert.
+  assert.ok(first.createdAt >= before && first.createdAt <= Date.now() + 1);
+  assert.equal(first.createdAt, second.createdAt);
 });

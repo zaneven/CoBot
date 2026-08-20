@@ -69,15 +69,6 @@ export interface Config {
     maxEditChars: number;
     pollTimeout: number;
     flushMs: number;
-    /** When false, tool calls (Bash/Read/Write etc.) are not streamed to the
-     *  chat — only the final assistant text is shown. SilenceIndicator still
-     *  heartbeats so the user knows work is happening. Default: false. */
-    showToolCalls: boolean;
-    /** When true, the model's reasoning/chain-of-thought (thinking deltas from
-     *  reasoning models) is surfaced live in the chat as a distinct blockquote,
-     *  tail-windowed so a long think stays compact. Zero cost on turns that
-     *  produce no thinking. Default: true. */
-    showThinking: boolean;
   };
   hermes: HermesConfig;
   logLevel: string;
@@ -86,15 +77,13 @@ export interface Config {
 export interface YamlConfig {
   projects?: string[];
   devRoots?: string[];
-  defaults?: { model?: string; maxTurns?: number; dailyCostCapUsd?: number; dailyTokenCap?: number };
+  defaults?: { model?: string; maxTurns?: number; taskTimeoutMs?: number; dailyCostCapUsd?: number; dailyTokenCap?: number };
   telegram?: {
     botToken?: string;
     allowedUsers?: number[] | string;
     maxEditChars?: number;
     pollTimeout?: number;
     flushMs?: number;
-    showToolCalls?: boolean;
-    showThinking?: boolean;
   };
   hermes?: { enabled?: boolean; apiUrl?: string; apiKey?: string };
   approval?: { mode?: ApprovalMode; skipTools?: string[]; timeoutMs?: number; timeoutAction?: "allow" | "deny" };
@@ -235,7 +224,11 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
     apiKey: yaml.hermes?.apiKey === "${HERMES_API_KEY}" ? apiKey : (yaml.hermes?.apiKey ?? apiKey),
   };
 
-  const taskTimeoutMs = Number(process.env.CLAUDE_TASK_TIMEOUT_MS ?? 10 * 60 * 1000);
+  // Hard per-task wall-clock watchdog (interrupts a hung task). Env overrides
+  // yaml; default 10 min. Exposed in the admin panel as "单次任务超时" (minutes).
+  const taskTimeoutMs = Number(
+    process.env.CLAUDE_TASK_TIMEOUT_MS ?? yaml.defaults?.taskTimeoutMs ?? 10 * 60 * 1000,
+  );
   // Approval timeout must be strictly less than the task watchdog, otherwise the
   // watchdog kills the task mid-prompt. Clamp with a 30s safety margin.
   const approvalTimeoutMs = (() => {
@@ -288,8 +281,6 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
       maxEditChars: yaml.telegram?.maxEditChars ?? 3500,
       pollTimeout: yaml.telegram?.pollTimeout ?? 30,
       flushMs: yaml.telegram?.flushMs ?? 900,
-      showToolCalls: yaml.telegram?.showToolCalls ?? false,
-      showThinking: yaml.telegram?.showThinking ?? true,
     },
     hermes,
     logLevel: process.env.LOG_LEVEL ?? "info",
