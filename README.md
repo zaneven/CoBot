@@ -86,11 +86,27 @@ Claude Code is a powerful agentic coding tool — but it lives in your terminal.
 git clone https://github.com/zaneven/CoBot.git
 cd CoBot
 ./scripts/cobot.sh install
-# copies config templates · installs deps · rebuilds native SQLite · links the global `cobot` CLI
+# copies config templates · installs deps · interactive setup · links the global `cobot` CLI
 ```
 
+Install drops into an interactive setup — **fill in just three fields** to run, everything else stays at its default:
+
+| Field | What it is | Where to get it |
+|-------|------------|-----------------|
+| **Telegram bot token** | the bot's token (required) | create a bot with [@BotFather](https://t.me/BotFather) |
+| **Your Telegram user ID** | who may control the bot (required; comma-separated for several) | query [@userinfobot](https://t.me/userinfobot) |
+| **Dev root directory** | whose subdirectories `/bind` can attach (defaults to the project's parent) | press Enter to accept the default |
+
+When done, `.env` and `config.yaml` are written for you and the admin panel URL + key are printed. Then:
+
+```bash
+cobot start
+```
+
+> 💡 Re-run `npx tsx scripts/setup.ts` any time to change just those three; every other option lives in [Configuration](#configuration).
+
 <details>
-<summary>Manual alternative</summary>
+<summary>Manual alternative (skip the prompts)</summary>
 
 ```bash
 cp .env.example .env
@@ -98,31 +114,30 @@ cp config.example.yaml config.yaml
 npm install
 npm rebuild better-sqlite3   # only if your Node version changed
 ```
-</details>
 
-### 2 · Configure
-
-`.env` — your bot token + who may control it:
+Then fill in `.env`:
 
 ```bash
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGhi...
 TELEGRAM_ALLOWED_USERS=100123456       # your Telegram user ID (comma-separated)
 ```
 
-`config.yaml` — whitelist the directories CoBot may operate in:
+and the dev root + admin key in `config.yaml`:
 
 ```yaml
 devRoots:
   - /Users/YOU/Develop          # immediate subdirectories become switchable projects
-
-telegram:
-  allowedUsers: [100123456]    # or rely on .env
 
 admin:
   enabled: true                # built-in Web Admin console
   port: 8085
   apiKey: "choose-a-secret"    # bearer token for the admin API
 ```
+</details>
+
+### 2 · Configure
+
+The interactive install already fills in the three fields needed to start. To tune the model, quotas, approval mode, proxy and more, edit `.env` and `config.yaml` directly (env vars win) or use the built-in Web admin console — see [Configuration](#configuration) for the full reference.
 
 ### 3 · Run
 

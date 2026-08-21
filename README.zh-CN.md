@@ -82,11 +82,27 @@ Claude Code 是很强的 Agent 编程工具——但它活在你的终端里。*
 git clone https://github.com/zaneven/CoBot.git
 cd CoBot
 ./scripts/cobot.sh install
-# 复制配置模板 · 安装依赖 · 重编译 SQLite 原生模块 · 注册全局 `cobot` CLI
+# 复制配置模板 · 安装依赖 · 交互式配置必要项 · 注册全局 `cobot` CLI
 ```
 
+安装过程会进入交互式配置，**只需填写三项**即可跑起来，其余保持默认：
+
+| 配置项 | 说明 | 获取方式 |
+|--------|------|---------|
+| **Telegram Bot Token** | 机器人令牌（必填） | [@BotFather](https://t.me/BotFather) 创建机器人 |
+| **Telegram 用户 ID** | 谁能控制机器人（必填，逗号分隔多个） | [@userinfobot](https://t.me/userinfobot) 查询 |
+| **开发根目录** | 其子目录可用 `/bind` 绑定（默认项目父目录） | 回车采用默认 |
+
+交互完成后自动写入 `.env` 与 `config.yaml`，并打印管理面板地址与密钥，随后直接：
+
+```bash
+cobot start
+```
+
+> 💡 随时运行 `npx tsx scripts/setup.ts` 可重新修改这三项；其余可调项见 [配置](#配置)。
+
 <details>
-<summary>手动安装</summary>
+<summary>手动安装（跳过交互）</summary>
 
 ```bash
 cp .env.example .env
@@ -94,31 +110,30 @@ cp config.example.yaml config.yaml
 npm install
 npm rebuild better-sqlite3   # 仅当 Node 版本变更时需要
 ```
-</details>
 
-### 2 · 配置
-
-`.env` —— 机器人 Token + 谁能控制它：
+再手动填写 `.env`：
 
 ```bash
 TELEGRAM_BOT_TOKEN=123456789:ABCdefGhi...
 TELEGRAM_ALLOWED_USERS=100123456       # 你的 Telegram 用户 ID（逗号分隔）
 ```
 
-`config.yaml` —— 白名单允许 CoBot 操作的目录：
+和 `config.yaml` 的开发根目录与管理密钥：
 
 ```yaml
 devRoots:
   - /Users/YOU/Develop          # 其直接子目录即为可切换的项目
-
-telegram:
-  allowedUsers: [100123456]    # 也可只写 .env
 
 admin:
   enabled: true                # 内置 Web 管理控制台
   port: 8085
   apiKey: "选一个密钥"          # 管理 API 的 bearer token
 ```
+</details>
+
+### 2 · 配置
+
+交互式安装已填好启动所需的三项。需要调整模型、配额、审批模式、代理等更多选项时，直接编辑 `.env` 与 `config.yaml`（环境变量优先），或用内置 Web 管理面板在线修改——完整说明见 [配置](#配置) 章节。
 
 ### 3 · 启动
 

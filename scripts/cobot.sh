@@ -127,7 +127,15 @@ cmd_install() {
   echo "[+] Installing npm dependencies..."
   npm install
 
-
+  # 3. Interactive configuration — only the essentials; everything else keeps
+  #    its default so the bot can start right after install. Skipped in
+  #    non-interactive shells (CI/piped stdin) so `install` stays scriptable.
+  if [ -t 0 ]; then
+    echo "[+] Interactive configuration..."
+    npx tsx scripts/setup.ts || echo "[!] Setup skipped — edit .env and config.yaml manually before starting."
+  else
+    echo "[!] Non-interactive shell detected — skipping setup. Run 'npx tsx scripts/setup.ts' to configure."
+  fi
 
   # 4. Typecheck
   echo "[+] Running typecheck..."
