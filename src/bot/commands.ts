@@ -88,13 +88,12 @@ export async function handleHelp(ctx: Context): Promise<void> {
 // ── ReplyKeyboardMarkup — persistent quick-access bar ──────────────────
 
 /** Build the persistent keyboard that sits above the text-input bar.
- *  Buttons show Chinese labels; each maps to a flat keyword that is
+ *  Buttons show English labels; each maps to a keyword that is
  *  routed via `bot.hears(...)` in bot.ts. */
-function buildActionKeyboard(): Keyboard {
+export function buildActionKeyboard(): Keyboard {
   return Keyboard.from([
-    ["项目", "会话", "新建"],
-    ["停止", "队列", "任务"],
-    ["审批"],
+    ["Projects", "Sessions", "New"],
+    ["Stop", "Queue", "Tasks"],
   ]).resized();
 }
 

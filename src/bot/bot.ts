@@ -133,14 +133,14 @@ export function createBot(
     );
   });
 
-  // Chinese keyboard‑button presses — map the flat labels to existing handlers.
-  bot.hears("新建",   (ctx) => handleNew(ctx, store));
-  bot.hears("停止",   (ctx) => handleStop(ctx, registry));
-  bot.hears("会话",   (ctx) => handleSessions(ctx, store));
-  bot.hears("项目",   (ctx) => handleProjects(ctx, config, store));
-  bot.hears("队列",   (ctx) => handleQueue(ctx, registry));
-  bot.hears("任务",   (ctx) => handleTasks(ctx, store, registry));
-  bot.hears("审批",   (ctx) => handleApprove(ctx, store));
+  // Keyboard‑button presses — map labels to existing handlers (supports English and Chinese).
+  bot.hears(/^(New|新建)$/i,        (ctx) => handleNew(ctx, store));
+  bot.hears(/^(Stop|停止)$/i,       (ctx) => handleStop(ctx, registry));
+  bot.hears(/^(Sessions?|会话)$/i,  (ctx) => handleSessions(ctx, store));
+  bot.hears(/^(Projects?|项目)$/i,  (ctx) => handleProjects(ctx, config, store));
+  bot.hears(/^(Queue|队列)$/i,      (ctx) => handleQueue(ctx, registry));
+  bot.hears(/^(Tasks?|任务)$/i,     (ctx) => handleTasks(ctx, store, registry));
+  bot.hears(/^(Approve|审批)$/i,    (ctx) => handleApprove(ctx, store));
 
   bot.on("message:text", (ctx) => handleText(ctx, config, store, registry));
   // Photos and documents (screenshots / PDFs / text files) become multimodal prompts.

@@ -218,7 +218,7 @@ Each Telegram chat binds to **one whitelisted project directory**. Every prompt 
 | `/approve auto\|interactive\|list\|clear <tool\|all>` | Tool-call approval mode |
 | `/help` | Show this list |
 
-**Keyboard buttons:** `项目` `会话` `新建` — `停止` `队列` `任务` — `审批`
+**Keyboard buttons:** `Projects` `Sessions` `New` — `Stop` `Queue` `Tasks`
 
 **Plain text**, **photo**, or **document** → sent straight to Claude Code (streaming).
 

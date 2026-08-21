@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>CoBot 24x24 像素风图标方案预览</title>
+  <style>
+    :root {
+      --bg: #0A0E14;
+      --panel: #111A26;
+      --border: #1E2A3A;
+      --text: #E6EDF3;
+      --muted: #8391A6;
+      --primary: #E8A33D;
+      --primary-hover: #F5BC4C;
+      --success: #5FD38A;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      padding: 40px 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    h1 {
+      margin-bottom: 8px;
+      font-size: 26px;
+      color: var(--primary);
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    p.subtitle {
+      color: var(--muted);
+      margin-bottom: 36px;
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+      max-width: 920px;
+      width: 100%;
+    }
+    @media (max-width: 768px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+    .card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    }
+    .badge {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: rgba(232, 163, 61, 0.15);
+      color: var(--primary);
+      border: 1px solid rgba(232, 163, 61, 0.3);
+    }
+    .card h2 {
+      font-size: 16px;
+      margin-top: 16px;
+      margin-bottom: 8px;
+      color: var(--text);
+    }
+    .card p {
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.6;
+    }
+    .file-ref {
+      margin-top: 12px;
+      font-family: monospace;
+      font-size: 12px;
+      color: var(--primary-hover);
+      background: #070A10;
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .preview-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 24px;
+      margin: 20px 0 12px;
+      background: #070A10;
+      padding: 16px 24px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      width: 100%;
+    }
+    .scale-box {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .scale-box span {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: monospace;
+    }
+    svg {
+      image-rendering: pixelated;
+      shape-rendering: crispEdges;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>CoBot 24×24 像素风图标设计候选</h1>
+  <p class="subtitle">配色提取自 Admin 控制台：琥珀黄 (#E8A33D) · 高光金 (#F5BC4C) · 状态绿 (#5FD38A) · 终端黑 (#070A10)</p>
+
+  <div class="grid">
+    <!-- Option A -->
+    <div class="card">
+      <div class="badge">方案 A</div>
+      <div class="preview-row">
+        <div class="scale-box">
+          <svg width="24" height="24" viewBox="0 0 24 24"><use href="logo-a.svg#root" /><rect x="11" y="1" width="2" height="2" fill="#5FD38A"/><rect x="11" y="3" width="2" height="2" fill="#8C530D"/><rect x="2" y="10" width="2" height="5" fill="#8C530D"/><rect x="2" y="11" width="1" height="3" fill="#F5BC4C"/><rect x="20" y="10" width="2" height="5" fill="#8C530D"/><rect x="21" y="11" width="1" height="3" fill="#F5BC4C"/><rect x="6" y="5" width="12" height="2" fill="#F5BC4C"/><rect x="4" y="7" width="2" height="13" fill="#F5BC4C"/><rect x="6" y="7" width="12" height="1" fill="#E8A33D"/><rect x="18" y="7" width="2" height="13" fill="#8C530D"/><rect x="4" y="20" width="16" height="1" fill="#8C530D"/><rect x="5" y="6" width="1" height="1" fill="#F5BC4C"/><rect x="18" y="6" width="1" height="1" fill="#8C530D"/><rect x="6" y="8" width="12" height="9" fill="#070A10"/><rect x="8" y="10" width="2" height="3" fill="#5FD38A"/><rect x="8" y="10" width="1" height="1" fill="#E6EDF3"/><rect x="14" y="10" width="2" height="3" fill="#5FD38A"/><rect x="14" y="10" width="1" height="1" fill="#E6EDF3"/><rect x="10" y="14" width="4" height="1" fill="#E8A33D"/><rect x="7" y="13" width="1" height="1" fill="#F5BC4C" fill-opacity="0.6"/><rect x="16" y="13" width="1" height="1" fill="#F5BC4C" fill-opacity="0.6"/><rect x="7" y="18" width="10" height="2" fill="#E8A33D"/><rect x="8" y="21" width="8" height="2" fill="#1E2A3A"/><rect x="10" y="21" width="4" height="1" fill="#8391A6"/></svg>
+          <span>24px (1x)</span>
+        </div>
+        <div class="scale-box">
+          <svg width="48" height="48" viewBox="0 0 24 24"><rect x="11" y="1" width="2" height="2" fill="#5FD38A"/><rect x="11" y="3" width="2" height="2" fill="#8C530D"/><rect x="2" y="10" width="2" height="5" fill="#8C530D"/><rect x="2" y="11" width="1" height="3" fill="#F5BC4C"/><rect x="20" y="10" width="2" height="5" fill="#8C530D"/><rect x="21" y="11" width="1" height="3" fill="#F5BC4C"/><rect x="6" y="5" width="12" height="2" fill="#F5BC4C"/><rect x="4" y="7" width="2" height="13" fill="#F5BC4C"/><rect x="6" y="7" width="12" height="1" fill="#E8A33D"/><rect x="18" y="7" width="2" height="13" fill="#8C530D"/><rect x="4" y="20" width="16" height="1" fill="#8C530D"/><rect x="5" y="6" width="1" height="1" fill="#F5BC4C"/><rect x="18" y="6" width="1" height="1" fill="#8C530D"/><rect x="6" y="8" width="12" height="9" fill="#070A10"/><rect x="8" y="10" width="2" height="3" fill="#5FD38A"/><rect x="8" y="10" width="1" height="1" fill="#E6EDF3"/><rect x="14" y="10" width="2" height="3" fill="#5FD38A"/><rect x="14" y="10" width="1" height="1" fill="#E6EDF3"/><rect x="10" y="14" width="4" height="1" fill="#E8A33D"/><rect x="7" y="13" width="1" height="1" fill="#F5BC4C" fill-opacity="0.6"/><rect x="16" y="13" width="1" height="1" fill="#F5BC4C" fill-opacity="0.6"/><rect x="7" y="18" width="10" height="2" fill="#E8A33D"/><rect x="8" y="21" width="8" height="2" fill="#1E2A3A"/><rect x="10" y="21" width="4" height="1" fill="#8391A6"/></svg>
+          <span>48px (2x)</span>
+        </div>
+        <div class="scale-box">
+          <svg width="96" height="96" viewBox="0 0 24 24"><rect x="11" y="1" width="2" height="2" fill="#5FD38A"/><rect x="11" y="3" width="2" height="2" fill="#8C530D"/><rect x="2" y="10" width="2" height="5" fill="#8C530D"/><rect x="2" y="11" width="1" height="3" fill="#F5BC4C"/><rect x="20" y="10" width="2" height="5" fill="#8C530D"/><rect x="21" y="11" width="1" height="3" fill="#F5BC4C"/><rect x="6" y="5" width="12" height="2" fill="#F5BC4C"/><rect x="4" y="7" width="2" height="13" fill="#F5BC4C"/><rect x="6" y="7" width="12" height="1" fill="#E8A33D"/><rect x="18" y="7" width="2" height="13" fill="#8C530D"/><rect x="4" y="20" width="16" height="1" fill="#8C530D"/><rect x="5" y="6" width="1" height="1" fill="#F5BC4C"/><rect x="18" y="6" width="1" height="1" fill="#8C530D"/><rect x="6" y="8" width="12" height="9" fill="#070A10"/><rect x="8" y="10" width="2" height="3" fill="#5FD38A"/><rect x="8" y="10" width="1" height="1" fill="#E6EDF3"/><rect x="14" y="10" width="2" height="3" fill="#5FD38A"/><rect x="14" y="10" width="1" height="1" fill="#E6EDF3"/><rect x="10" y="14" width="4" height="1" fill="#E8A33D"/><rect x="7" y="13" width="1" height="1" fill="#F5BC4C" fill-opacity="0.6"/><rect x="16" y="13" width="1" height="1" fill="#F5BC4C" fill-opacity="0.6"/><rect x="7" y="18" width="10" height="2" fill="#E8A33D"/><rect x="8" y="21" width="8" height="2" fill="#1E2A3A"/><rect x="10" y="21" width="4" height="1" fill="#8391A6"/></svg>
+          <span>96px (4x)</span>
+        </div>
+      </div>
+      <h2>经典机甲助手 (Classic Cyber Bot)</h2>
+      <p>方正复古的机器人头部，配备绿色状态天线灯、金属耳塞与深色终端视窗，经典且辨识度极高。</p>
+      <div class="file-ref">docs/assets/logo-a.svg</div>
+    </div>
+
+    <!-- Option B -->
+    <div class="card">
+      <div class="badge">方案 B</div>
+      <div class="preview-row">
+        <div class="scale-box">
+          <svg width="24" height="24" viewBox="0 0 24 24"><rect x="11" y="1" width="2" height="1" fill="#5FD38A"/><rect x="11" y="2" width="2" height="1" fill="#8C530D"/><rect x="6" y="3" width="12" height="1" fill="#F5BC4C"/><rect x="5" y="4" width="14" height="7" fill="#E8A33D"/><rect x="5" y="4" width="1" height="7" fill="#F5BC4C"/><rect x="18" y="4" width="1" height="7" fill="#8C530D"/><rect x="7" y="5" width="10" height="4" fill="#070A10"/><rect x="8" y="6" width="3" height="2" fill="#5FD38A"/><rect x="8" y="6" width="1" height="1" fill="#E6EDF3"/><rect x="13" y="6" width="3" height="2" fill="#5FD38A"/><rect x="13" y="6" width="1" height="1" fill="#E6EDF3"/><rect x="9" y="11" width="6" height="1" fill="#1E2A3A"/><rect x="6" y="12" width="12" height="6" fill="#E8A33D"/><rect x="6" y="12" width="1" height="6" fill="#F5BC4C"/><rect x="17" y="12" width="1" height="6" fill="#8C530D"/><rect x="9" y="13" width="6" height="2" fill="#070A10"/><rect x="10" y="13" width="4" height="1" fill="#F5BC4C"/><rect x="11" y="14" width="2" height="1" fill="#5FD38A"/><rect x="3" y="12" width="2" height="5" fill="#8C530D"/><rect x="3" y="16" width="2" height="2" fill="#F5BC4C"/><rect x="19" y="12" width="2" height="5" fill="#8C530D"/><rect x="19" y="16" width="2" height="2" fill="#F5BC4C"/><rect x="7" y="18" width="10" height="1" fill="#8C530D"/><rect x="7" y="19" width="4" height="3" fill="#1E2A3A"/><rect x="7" y="21" width="4" height="1" fill="#F5BC4C"/><rect x="13" y="19" width="4" height="3" fill="#1E2A3A"/><rect x="13" y="21" width="4" height="1" fill="#F5BC4C"/></svg>
+          <span>24px (1x)</span>
+        </div>
+        <div class="scale-box">
+          <svg width="48" height="48" viewBox="0 0 24 24"><rect x="11" y="1" width="2" height="1" fill="#5FD38A"/><rect x="11" y="2" width="2" height="1" fill="#8C530D"/><rect x="6" y="3" width="12" height="1" fill="#F5BC4C"/><rect x="5" y="4" width="14" height="7" fill="#E8A33D"/><rect x="5" y="4" width="1" height="7" fill="#F5BC4C"/><rect x="18" y="4" width="1" height="7" fill="#8C530D"/><rect x="7" y="5" width="10" height="4" fill="#070A10"/><rect x="8" y="6" width="3" height="2" fill="#5FD38A"/><rect x="8" y="6" width="1" height="1" fill="#E6EDF3"/><rect x="13" y="6" width="3" height="2" fill="#5FD38A"/><rect x="13" y="6" width="1" height="1" fill="#E6EDF3"/><rect x="9" y="11" width="6" height="1" fill="#1E2A3A"/><rect x="6" y="12" width="12" height="6" fill="#E8A33D"/><rect x="6" y="12" width="1" height="6" fill="#F5BC4C"/><rect x="17" y="12" width="1" height="6" fill="#8C530D"/><rect x="9" y="13" width="6" height="2" fill="#070A10"/><rect x="10" y="13" width="4" height="1" fill="#F5BC4C"/><rect x="11" y="14" width="2" height="1" fill="#5FD38A"/><rect x="3" y="12" width="2" height="5" fill="#8C530D"/><rect x="3" y="16" width="2" height="2" fill="#F5BC4C"/><rect x="19" y="12" width="2" height="5" fill="#8C530D"/><rect x="19" y="16" width="2" height="2" fill="#F5BC4C"/><rect x="7" y="18" width="10" height="1" fill="#8C530D"/><rect x="7" y="19" width="4" height="3" fill="#1E2A3A"/><rect x="7" y="21" width="4" height="1" fill="#F5BC4C"/><rect x="13" y="19" width="4" height="3" fill="#1E2A3A"/><rect x="13" y="21" width="4" height="1" fill="#F5BC4C"/></svg>
+          <span>48px (2x)</span>
+        </div>
+        <div class="scale-box">
+          <svg width="96" height="96" viewBox="0 0 24 24"><rect x="11" y="1" width="2" height="1" fill="#5FD38A"/><rect x="11" y="2" width="2" height="1" fill="#8C530D"/><rect x="6" y="3" width="12" height="1" fill="#F5BC4C"/><rect x="5" y="4" width="14" height="7" fill="#E8A33D"/><rect x="5" y="4" width="1" height="7" fill="#F5BC4C"/><rect x="18" y="4" width="1" height="7" fill="#8C530D"/><rect x="7" y="5" width="10" height="4" fill="#070A10"/><rect x="8" y="6" width="3" height="2" fill="#5FD38A"/><rect x="8" y="6" width="1" height="1" fill="#E6EDF3"/><rect x="13" y="6" width="3" height="2" fill="#5FD38A"/><rect x="13" y="6" width="1" height="1" fill="#E6EDF3"/><rect x="9" y="11" width="6" height="1" fill="#1E2A3A"/><rect x="6" y="12" width="12" height="6" fill="#E8A33D"/><rect x="6" y="12" width="1" height="6" fill="#F5BC4C"/><rect x="17" y="12" width="1" height="6" fill="#8C530D"/><rect x="9" y="13" width="6" height="2" fill="#070A10"/><rect x="10" y="13" width="4" height="1" fill="#F5BC4C"/><rect x="11" y="14" width="2" height="1" fill="#5FD38A"/><rect x="3" y="12" width="2" height="5" fill="#8C530D"/><rect x="3" y="16" width="2" height="2" fill="#F5BC4C"/><rect x="19" y="12" width="2" height="5" fill="#8C530D"/><rect x="19" y="16" width="2" height="2" fill="#F5BC4C"/><rect x="7" y="18" width="10" height="1" fill="#8C530D"/><rect x="7" y="19" width="4" height="3" fill="#1E2A3A"/><rect x="7" y="21" width="4" height="1" fill="#F5BC4C"/><rect x="13" y="19" width="4" height="3" fill="#1E2A3A"/><rect x="13" y="21" width="4" height="1" fill="#F5BC4C"/></svg>
+          <span>96px (4x)</span>
+        </div>
+      </div>
+      <h2>全身陪伴小机器人 (Full-Body Companion)</h2>
+      <p>精致的 Q 版全身微型机器人，胸口带有 CoBot 特征指示灯条与双机械手臂，充满活力与亲和力。</p>
+      <div class="file-ref">docs/assets/logo-b.svg</div>
+    </div>
+
+    <!-- Option C -->
+    <div class="card">
+      <div class="badge">方案 C</div>
+      <div class="preview-row">
+        <div class="scale-box">
+          <svg width="24" height="24" viewBox="0 0 24 24"><rect x="9" y="1" width="6" height="1" fill="#F5BC4C"/><rect x="8" y="2" width="1" height="2" fill="#F5BC4C"/><rect x="15" y="2" width="1" height="2" fill="#8C530D"/><rect x="4" y="3" width="16" height="1" fill="#F5BC4C"/><rect x="3" y="4" width="1" height="14" fill="#F5BC4C"/><rect x="4" y="4" width="16" height="14" fill="#E8A33D"/><rect x="20" y="4" width="1" height="14" fill="#8C530D"/><rect x="4" y="18" width="16" height="1" fill="#8C530D"/><rect x="5" y="5" width="14" height="11" fill="#070A10"/><rect x="7" y="7" width="2" height="1" fill="#F5BC4C"/><rect x="15" y="7" width="2" height="1" fill="#F5BC4C"/><rect x="9" y="8" width="2" height="1" fill="#E8A33D"/><rect x="13" y="8" width="2" height="1" fill="#E8A33D"/><rect x="11" y="9" width="2" height="1" fill="#E8A33D"/><rect x="7" y="11" width="2" height="1" fill="#5FD38A"/><rect x="15" y="11" width="2" height="1" fill="#5FD38A"/><rect x="9" y="12" width="2" height="1" fill="#5FD38A"/><rect x="13" y="12" width="2" height="1" fill="#5FD38A"/><rect x="11" y="13" width="2" height="1" fill="#5FD38A"/><rect x="6" y="17" width="2" height="1" fill="#5FD38A"/><rect x="9" y="17" width="2" height="1" fill="#F5BC4C"/><rect x="16" y="17" width="2" height="1" fill="#8C530D"/><rect x="10" y="19" width="4" height="1" fill="#8C530D"/><rect x="6" y="20" width="12" height="2" fill="#1E2A3A"/><rect x="7" y="22" width="10" height="1" fill="#2B3B4F"/></svg>
+          <span>24px (1x)</span>
+        </div>
+        <div class="scale-box">
+          <svg width="48" height="48" viewBox="0 0 24 24"><rect x="9" y="1" width="6" height="1" fill="#F5BC4C"/><rect x="8" y="2" width="1" height="2" fill="#F5BC4C"/><rect x="15" y="2" width="1" height="2" fill="#8C530D"/><rect x="4" y="3" width="16" height="1" fill="#F5BC4C"/><rect x="3" y="4" width="1" height="14" fill="#F5BC4C"/><rect x="4" y="4" width="16" height="14" fill="#E8A33D"/><rect x="20" y="4" width="1" height="14" fill="#8C530D"/><rect x="4" y="18" width="16" height="1" fill="#8C530D"/><rect x="5" y="5" width="14" height="11" fill="#070A10"/><rect x="7" y="7" width="2" height="1" fill="#F5BC4C"/><rect x="15" y="7" width="2" height="1" fill="#F5BC4C"/><rect x="9" y="8" width="2" height="1" fill="#E8A33D"/><rect x="13" y="8" width="2" height="1" fill="#E8A33D"/><rect x="11" y="9" width="2" height="1" fill="#E8A33D"/><rect x="7" y="11" width="2" height="1" fill="#5FD38A"/><rect x="15" y="11" width="2" height="1" fill="#5FD38A"/><rect x="9" y="12" width="2" height="1" fill="#5FD38A"/><rect x="13" y="12" width="2" height="1" fill="#5FD38A"/><rect x="11" y="13" width="2" height="1" fill="#5FD38A"/><rect x="6" y="17" width="2" height="1" fill="#5FD38A"/><rect x="9" y="17" width="2" height="1" fill="#F5BC4C"/><rect x="16" y="17" width="2" height="1" fill="#8C530D"/><rect x="10" y="19" width="4" height="1" fill="#8C530D"/><rect x="6" y="20" width="12" height="2" fill="#1E2A3A"/><rect x="7" y="22" width="10" height="1" fill="#2B3B4F"/></svg>
+          <span>48px (2x)</span>
+        </div>
+        <div class="scale-box">
+          <svg width="96" height="96" viewBox="0 0 24 24"><rect x="9" y="1" width="6" height="1" fill="#F5BC4C"/><rect x="8" y="2" width="1" height="2" fill="#F5BC4C"/><rect x="15" y="2" width="1" height="2" fill="#8C530D"/><rect x="4" y="3" width="16" height="1" fill="#F5BC4C"/><rect x="3" y="4" width="1" height="14" fill="#F5BC4C"/><rect x="4" y="4" width="16" height="14" fill="#E8A33D"/><rect x="20" y="4" width="1" height="14" fill="#8C530D"/><rect x="4" y="18" width="16" height="1" fill="#8C530D"/><rect x="5" y="5" width="14" height="11" fill="#070A10"/><rect x="7" y="7" width="2" height="1" fill="#F5BC4C"/><rect x="15" y="7" width="2" height="1" fill="#F5BC4C"/><rect x="9" y="8" width="2" height="1" fill="#E8A33D"/><rect x="13" y="8" width="2" height="1" fill="#E8A33D"/><rect x="11" y="9" width="2" height="1" fill="#E8A33D"/><rect x="7" y="11" width="2" height="1" fill="#5FD38A"/><rect x="15" y="11" width="2" height="1" fill="#5FD38A"/><rect x="9" y="12" width="2" height="1" fill="#5FD38A"/><rect x="13" y="12" width="2" height="1" fill="#5FD38A"/><rect x="11" y="13" width="2" height="1" fill="#5FD38A"/><rect x="6" y="17" width="2" height="1" fill="#5FD38A"/><rect x="9" y="17" width="2" height="1" fill="#F5BC4C"/><rect x="16" y="17" width="2" height="1" fill="#8C530D"/><rect x="10" y="19" width="4" height="1" fill="#8C530D"/><rect x="6" y="20" width="12" height="2" fill="#1E2A3A"/><rect x="7" y="22" width="10" height="1" fill="#2B3B4F"/></svg>
+          <span>96px (4x)</span>
+        </div>
+      </div>
+      <h2>赛博终端机器人 (Terminal Chevron Bot)</h2>
+      <p>复古 CRT 工业机体，内嵌 CoBot 标志性的双色像素折线徽标（琥珀黄 + 薄荷绿），极具开发者硬核气质。</p>
+      <div class="file-ref">docs/assets/logo-c.svg</div>
+    </div>
+
+    <!-- Option D -->
+    <div class="card">
+      <div class="badge">方案 D</div>
+      <div class="preview-row">
+        <div class="scale-box">
+          <svg width="24" height="24" viewBox="0 0 24 24"><rect x="11" y="1" width="2" height="2" fill="#F5BC4C"/><rect x="1" y="9" width="2" height="6" fill="#8C530D"/><rect x="1" y="10" width="1" height="4" fill="#F5BC4C"/><rect x="1" y="15" width="2" height="1" fill="#5FD38A"/><rect x="21" y="9" width="2" height="6" fill="#8C530D"/><rect x="22" y="10" width="1" height="4" fill="#8C530D"/><rect x="21" y="15" width="2" height="1" fill="#5FD38A"/><rect x="7" y="3" width="10" height="1" fill="#F5BC4C"/><rect x="5" y="4" width="2" height="1" fill="#F5BC4C"/><rect x="17" y="4" width="2" height="1" fill="#8C530D"/><rect x="4" y="5" width="1" height="2" fill="#F5BC4C"/><rect x="19" y="5" width="1" height="2" fill="#8C530D"/><rect x="3" y="7" width="18" height="10" fill="#E8A33D"/><rect x="3" y="7" width="1" height="10" fill="#F5BC4C"/><rect x="20" y="7" width="1" height="10" fill="#8C530D"/><rect x="4" y="17" width="1" height="2" fill="#8C530D"/><rect x="19" y="17" width="1" height="2" fill="#8C530D"/><rect x="5" y="19" width="2" height="1" fill="#8C530D"/><rect x="17" y="19" width="2" height="1" fill="#8C530D"/><rect x="7" y="20" width="10" height="1" fill="#8C530D"/><rect x="6" y="7" width="12" height="8" fill="#070A10"/><rect x="5" y="8" width="1" height="6" fill="#070A10"/><rect x="18" y="8" width="1" height="6" fill="#070A10"/><rect x="8" y="9" width="2" height="3" fill="#5FD38A"/><rect x="8" y="9" width="1" height="1" fill="#E6EDF3"/><rect x="14" y="9" width="2" height="3" fill="#5FD38A"/><rect x="14" y="9" width="1" height="1" fill="#E6EDF3"/><rect x="6" y="13" width="2" height="1" fill="#F5BC4C"/><rect x="16" y="13" width="2" height="1" fill="#F5BC4C"/><rect x="10" y="21" width="4" height="1" fill="#1E2A3A"/><rect x="11" y="22" width="2" height="2" fill="#5FD38A"/></svg>
+          <span>24px (1x)</span>
+        </div>
+        <div class="scale-box">
+          <svg width="48" height="48" viewBox="0 0 24 24"><rect x="11" y="1" width="2" height="2" fill="#F5BC4C"/><rect x="1" y="9" width="2" height="6" fill="#8C530D"/><rect x="1" y="10" width="1" height="4" fill="#F5BC4C"/><rect x="1" y="15" width="2" height="1" fill="#5FD38A"/><rect x="21" y="9" width="2" height="6" fill="#8C530D"/><rect x="22" y="10" width="1" height="4" fill="#8C530D"/><rect x="21" y="15" width="2" height="1" fill="#5FD38A"/><rect x="7" y="3" width="10" height="1" fill="#F5BC4C"/><rect x="5" y="4" width="2" height="1" fill="#F5BC4C"/><rect x="17" y="4" width="2" height="1" fill="#8C530D"/><rect x="4" y="5" width="1" height="2" fill="#F5BC4C"/><rect x="19" y="5" width="1" height="2" fill="#8C530D"/><rect x="3" y="7" width="18" height="10" fill="#E8A33D"/><rect x="3" y="7" width="1" height="10" fill="#F5BC4C"/><rect x="20" y="7" width="1" height="10" fill="#8C530D"/><rect x="4" y="17" width="1" height="2" fill="#8C530D"/><rect x="19" y="17" width="1" height="2" fill="#8C530D"/><rect x="5" y="19" width="2" height="1" fill="#8C530D"/><rect x="17" y="19" width="2" height="1" fill="#8C530D"/><rect x="7" y="20" width="10" height="1" fill="#8C530D"/><rect x="6" y="7" width="12" height="8" fill="#070A10"/><rect x="5" y="8" width="1" height="6" fill="#070A10"/><rect x="18" y="8" width="1" height="6" fill="#070A10"/><rect x="8" y="9" width="2" height="3" fill="#5FD38A"/><rect x="8" y="9" width="1" height="1" fill="#E6EDF3"/><rect x="14" y="9" width="2" height="3" fill="#5FD38A"/><rect x="14" y="9" width="1" height="1" fill="#E6EDF3"/><rect x="6" y="13" width="2" height="1" fill="#F5BC4C"/><rect x="16" y="13" width="2" height="1" fill="#F5BC4C"/><rect x="10" y="21" width="4" height="1" fill="#1E2A3A"/><rect x="11" y="22" width="2" height="2" fill="#5FD38A"/></svg>
+          <span>48px (2x)</span>
+        </div>
+        <div class="scale-box">
+          <svg width="96" height="96" viewBox="0 0 24 24"><rect x="11" y="1" width="2" height="2" fill="#F5BC4C"/><rect x="1" y="9" width="2" height="6" fill="#8C530D"/><rect x="1" y="10" width="1" height="4" fill="#F5BC4C"/><rect x="1" y="15" width="2" height="1" fill="#5FD38A"/><rect x="21" y="9" width="2" height="6" fill="#8C530D"/><rect x="22" y="10" width="1" height="4" fill="#8C530D"/><rect x="21" y="15" width="2" height="1" fill="#5FD38A"/><rect x="7" y="3" width="10" height="1" fill="#F5BC4C"/><rect x="5" y="4" width="2" height="1" fill="#F5BC4C"/><rect x="17" y="4" width="2" height="1" fill="#8C530D"/><rect x="4" y="5" width="1" height="2" fill="#F5BC4C"/><rect x="19" y="5" width="1" height="2" fill="#8C530D"/><rect x="3" y="7" width="18" height="10" fill="#E8A33D"/><rect x="3" y="7" width="1" height="10" fill="#F5BC4C"/><rect x="20" y="7" width="1" height="10" fill="#8C530D"/><rect x="4" y="17" width="1" height="2" fill="#8C530D"/><rect x="19" y="17" width="1" height="2" fill="#8C530D"/><rect x="5" y="19" width="2" height="1" fill="#8C530D"/><rect x="17" y="19" width="2" height="1" fill="#8C530D"/><rect x="7" y="20" width="10" height="1" fill="#8C530D"/><rect x="6" y="7" width="12" height="8" fill="#070A10"/><rect x="5" y="8" width="1" height="6" fill="#070A10"/><rect x="18" y="8" width="1" height="6" fill="#070A10"/><rect x="8" y="9" width="2" height="3" fill="#5FD38A"/><rect x="8" y="9" width="1" height="1" fill="#E6EDF3"/><rect x="14" y="9" width="2" height="3" fill="#5FD38A"/><rect x="14" y="9" width="1" height="1" fill="#E6EDF3"/><rect x="6" y="13" width="2" height="1" fill="#F5BC4C"/><rect x="16" y="13" width="2" height="1" fill="#F5BC4C"/><rect x="10" y="21" width="4" height="1" fill="#1E2A3A"/><rect x="11" y="22" width="2" height="2" fill="#5FD38A"/></svg>
+          <span>96px (4x)</span>
+        </div>
+      </div>
+      <h2>赛博悬浮球无人机 (Floating Cyber Orb)</h2>
+      <p>圆润的未来悬浮球体造型，两侧带有推进微翼，底部有离子悬浮光焰，科技感与灵动感十足。</p>
+      <div class="file-ref">docs/assets/logo-d.svg</div>
+    </div>
+  </div>
+
+</body>
+</html>

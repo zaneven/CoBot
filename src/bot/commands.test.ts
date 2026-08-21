@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { InlineKeyboard, Context } from "grammy";
-import { renderProjectsKeyboard, renderApprovalKeyboard, handleApprove, handleApproveModeCallback, handleBot } from "./commands.js";
+import { renderProjectsKeyboard, renderApprovalKeyboard, handleApprove, handleApproveModeCallback, handleBot, buildActionKeyboard } from "./commands.js";
 
 // grammY's InlineKeyboard instance carries the built grid on `.inline_keyboard`.
 type Button = { text?: string; callback_data?: string };
@@ -223,3 +223,17 @@ test("/bot status shows hot-reload mode when COBOT_WATCH=1", async () => {
     else process.env.COBOT_WATCH = prev;
   }
 });
+
+// ── Action keyboard (persistent ReplyKeyboardMarkup) ─────────────────
+
+test("buildActionKeyboard renders 2 rows of 3 English buttons without approval", () => {
+  const kb = buildActionKeyboard();
+  const raw = (kb as unknown as { keyboard: { text: string }[][] }).keyboard;
+  assert.equal(raw.length, 2, "must have exactly 2 rows");
+  assert.deepEqual(raw[0]!.map((b) => b.text), ["Projects", "Sessions", "New"]);
+  assert.deepEqual(raw[1]!.map((b) => b.text), ["Stop", "Queue", "Tasks"]);
+  const allTexts = raw.flat().map((b) => b.text);
+  assert.ok(!allTexts.includes("审批"), "should not contain 审批");
+  assert.ok(!allTexts.includes("Approve"), "should not contain Approve");
+});
+

@@ -214,7 +214,7 @@ cobot status    # 进程、代理、最近日志
 | `/approve auto\|interactive\|list\|clear <tool\|all>` | 工具调用审批模式 |
 | `/help` | 显示此列表 |
 
-**键盘按钮：** `项目` `会话` `新建` — `停止` `队列` `任务` — `审批`
+**键盘按钮：** `Projects` `Sessions` `New` — `Stop` `Queue` `Tasks`
 
 **纯文本**、**图片** 或 **文档** → 直接送给 Claude Code（流式）。
 
