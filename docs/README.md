@@ -1,34 +1,16 @@
-# CoBot
+# CoBot Docs
 
-A standalone TypeScript Telegram bot that drives your locally-active **Claude Code** conversations via the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk). It runs alongside Hermes (optional) without polling conflicts.
+This directory holds the project documentation and the source of the public
+GitHub Pages site.
 
-## Architecture
+| File | What it is |
+|------|------------|
+| [`commands.md`](./commands.md) | Every bot command, mirroring `BOT_COMMANDS` in `src/bot/commands.ts`. |
+| [`development.md`](./development.md) | Dev guide: setup, running, testing, proxy, env vars, source layout. |
+| [`markdown_rendering.md`](./markdown_rendering.md) | How streamed Markdown is rendered to Telegram — Rich/HTML fallback, `mdToTelegramHtml`, tool formatting, the `showTraceText` live process view. |
+| [`landing.html`](./landing.html) | Source for the public landing page. `.github/workflows/deploy-pages.yml` copies it to `_site/index.html` on every push to `main`. |
+| [`assets/`](./assets/) | Logos and `preview.html` used by the landing page; also referenced as the logo in the root [`README.md`](../README.md). |
 
-```
-Telegram (long-poll) ──► grammY bot ──► Registry ──► Claude Agent SDK
-                              ▲                  │
-                              │          streaming events
-                          SQLite store   (resume / new / abort)
-                              │
-                          node-cron ──► scheduled tasks to Telegram
-```
-
-- `src/bot/` — grammY handlers: commands, streaming, media, runs
-- `src/claude/` — Claude Agent SDK driver + types
-- `src/store/` — SQLite (better-sqlite3): bindings, tasks, cron jobs
-- `src/registry/` — per-chat active-run tracking + FIFO queue
-- `src/scheduler/` — node-cron scheduling manager
-- `src/util/` — proxy, HTTP, Telegram HTML formatting, logging
-
-Each chat is bound to one whitelisted project directory. Every prompt starts (or resumes) a Claude Code session in that directory, streaming the assistant output back to the chat.
-
-## Quick start
-
-```bash
-cp .env.example .env          # set TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_USERS
-cp config.example.yaml config.yaml  # whitelist your project dirs
-npm install
-npm run dev
-```
-
-In Telegram: `/projects` to pick a project, then just send text to start working.
+For the project overview, quick start, and screenshots, see the
+[root `README.md`](../README.md). For the full developer/agent guide, see
+[`AGENTS.md`](../AGENTS.md).

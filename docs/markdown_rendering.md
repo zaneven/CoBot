@@ -56,8 +56,10 @@ flowchart TD
    在将中间态文本发送给 Rich Message 解析器之前，先进行结构修复：
    - **自动闭合代码块**：检测未成对的 ```` ``` ```` 或 `~~~` 代码块，在末尾临时追加闭合标记，避免 Rich 渲染器解析崩溃。
    - **转义未闭合行内符号**：如末尾孤立的反引号（` ` ` -> ` \` `）或未完成的链接（`[text](url...` -> `\[\`）。
-
----
+4. **整体替换渲染 (`setContent`)**：
+   与 `text()` 的「追加 token 增量」不同，`setContent(text)` 每次调用都用一个**调用方已拼好的完整字符串**重渲染整条逻辑消息——用于「逐 tick 增长的已完成块列表」这类场景（例如 `showTraceText` 开启时，每个工具边界把已完成的叙述块重新渲染成 `**执行过程**` 子弹列表）。它同样标记 dirty 并走节流 flush，所以连续快速调用会合并成一次编辑；对空输入和 `finalize()` 之后的调用都是 no-op，因此调用方可以无条件每 tick 驱动它，只有非空渲染才真正发送。
+5. **结尾按钮回挂 (`finalize(replyMarkup)`)**：
+   Rich Message 会**静默丢弃 `reply_markup`**（按钮在 rich 消息上不渲染，与 `sendRichText` 同一坑）。因此 `finalize()` 在最后一次 flush 之后，对 Rich 模式下的最后一条消息调用 `editMessageReplyMarkup` 重新挂上键盘，失败时再降级为**单独发送一条携带按钮的普通消息**（文案 `💡 建议的下一步操作：`）。其中 `Bad Request: message is not modified`（按钮已挂上）被视为良性错误直接吞掉。`finalize()` 带幂等保护——`finally` 安全网里的二次调用不会重复发消息或重复挂按钮。HTML/纯文本模式自带 `reply_markup`，此分支 no-op。
 
 ### 3.2 `mdToTelegramHtml` 转换引擎 (`src/util/tgfmt.ts`)
 
@@ -94,30 +96,42 @@ flowchart TD
 
 ---
 
+### 3.4 执行过程展示 (`showTraceText`)
+
+当 `config.claude.showTraceText` 开启时，`runTurn` 会额外用 `setContent()` 驱动一条「执行过程」消息：每个工具边界把已 flush 的叙述文本块（`text` trace 事件）经 `toBulletList` 渲染成无序列表，逐块累加并以 `---` 分隔，**仅展示已完成块**——进行中的当轮文本留在缓冲区，直到下一个边界才出现，因此最终答案永远不会在流中途闪现（否则会在 done 时被折叠/重排）。运行结束时，`buildTraceReply()` 把完整的「过程列表 + 摘要」合并为一条消息，并通过 `finalize(replyMarkup)` 挂上下一步按钮；异常/中止/轮数耗尽时由 `finally` 分支兜底 `finalize()`，把最后一次渲染钉为最终状态。
+
+---
+
 ## 4. 关键代码流程示意
 
 ```typescript
 // 1. 初始化流式器
 const streamer = new TelegramStreamer(api, chatId, maxEditChars, flushMs);
 
-// 2. 接收 Claude 输出 delta 并加入缓冲区
+// 2a. 追加式：接收 Claude 输出 delta 并加入缓冲区
 await streamer.text(ev.delta);
 
-// 3. 定时或满额触发 flush()
-// 优先尝试 Rich Message
+// 2b. 整体替换式（showTraceText 开启时，每个工具边界重新渲染已完成块列表）
+await streamer.setContent(renderLiveTrace());
+
+// 3. 定时或满额触发 flush() —— 优先尝试 Rich Message
 const safeMd = sanitizeStreamMarkdown(buffer);
 await api.sendRichMessage(chatId, { markdown: safeMd });
 
 // 4. 降级路径 (Fallback to HTML)
 const html = mdToTelegramHtml(buffer);
 await api.sendMessage(chatId, html, { parse_mode: "HTML" });
+
+// 5. 收尾：把下一步按钮挂到 Rich 消息上（rich 模式静默丢按钮）
+await streamer.finalize(replyMarkup);
 ```
 
 ---
 
 ## 5. 源码目录索引
 
-- **`src/bot/streaming.ts`**：`TelegramStreamer` 缓冲管理、节流控制、Rich/HTML 发送状态机、`sanitizeStreamMarkdown`。
+- **`src/bot/streaming.ts`**：`TelegramStreamer` 缓冲管理、节流控制、Rich/HTML 发送状态机、`sanitizeStreamMarkdown`、`setContent`、`finalize` 按钮回挂。
 - **`src/util/tgfmt.ts`**：`mdToTelegramHtml` 转换逻辑、`parseTable` 表格转换、`inline` 语法扫描器、`escapeMd` 安全转义。
-- **`src/bot/runs.ts`**：对接 Claude 驱动层事件与流式器。
-- **`src/bot/streaming.test.ts` & `src/util/tgfmt.test.ts`**：流式格式化与转换引擎的单元测试集。
+- **`src/util/send.ts`**：`sendRichText` / `sendRichMessage` 发送封装与降级（同样处理 rich 模式丢按钮的坑）。
+- **`src/bot/runs.ts`**：对接 Claude 驱动层事件与流式器；`showTraceText` 下的实时过程消息与 `buildTraceReply` / `toBulletList`。
+- **`src/bot/streaming.test.ts` & `src/util/tgfmt.test.ts`**：流式格式化与转换引擎的单元测试集（含 `setContent` 替换语义、`finalize(replyMarkup)` 回挂/降级/幂等）。
