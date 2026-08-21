@@ -9,6 +9,7 @@ import { sendRichText } from "../util/send.js";
 import { logger } from "../util/logger.js";
 import { approvalManager } from "./approval.js";
 import { TaskDashboard } from "./dashboard.js";
+import { TelegramStreamer } from "./streaming.js";
 import { buildNextActions, renderSuggestionKeyboard, extractNextActions, NEXT_ACTIONS_DIRECTIVE } from "./nextActions.js";
 
 /**
@@ -139,6 +140,14 @@ async function runTurn(opts: {
   let lastNarration = "";
   const dashboard = new TaskDashboard(api, chatId, config.telegram.flushMs);
   let dashboardStarted = false;
+  // When the trace-text feature is on, the intermediate narration is streamed
+  // progressively into its own message (a growing bullet list of completed
+  // blocks) as the run proceeds, then finalized into that same message holding
+  // the full "执行过程" plus the summary and next-action buttons. When off,
+  // only the one-shot summary is sent at the end (the pre-feature behavior).
+  const traceStreamer: TelegramStreamer | undefined = config.claude.showTraceText
+    ? new TelegramStreamer(api, chatId, undefined, config.telegram.flushMs)
+    : undefined;
 
   function cleanNarration(text: string): string {
     let clean = text.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
@@ -164,9 +173,15 @@ async function runTurn(opts: {
   // Accumulate text/thinking deltas so we store one block per round, not per-token.
   let traceTextAccum = "";
   let traceThinkingAccum = "";
+  // The narration text blocks flushed to the trace (one per tool boundary / end).
+  // Kept separately from `traceEvents` so the reply can append these intermediate
+  // steps when config.claude.showTraceText is on.
+  const traceTexts: string[] = [];
   function flushTraceText(): void {
     if (traceTextAccum) {
-      pushTrace("text", { content: traceTextAccum.slice(0, 2000) });
+      const content = traceTextAccum.slice(0, 2000);
+      pushTrace("text", { content });
+      traceTexts.push(content);
       traceTextAccum = "";
     }
   }
@@ -175,6 +190,27 @@ async function runTurn(opts: {
       pushTrace("thinking", { content: traceThinkingAccum.slice(0, 2000) });
       traceThinkingAccum = "";
     }
+  }
+
+  // Render the already-flushed narration blocks as the live "执行过程" body for
+  // the trace streamer. Only completed blocks (in `traceTexts`) are shown live
+  // — the in-progress round's text stays in `traceTextAccum` until the next
+  // boundary, so the running message grows one block at a time and the final
+  // answer never appears mid-stream (it would otherwise collapse/reformat at
+  // done). Returns "" until at least one block exists, so the streamer's first
+  // real render happens only once there's something to show.
+  function renderLiveTrace(): string {
+    const lists = traceTexts.map((t) => toBulletList(t.trim())).filter(Boolean);
+    if (lists.length === 0) return "";
+    return `**执行过程**\n\n${lists.join("\n\n---\n\n")}`;
+  }
+  // Push the current live-trace body into the streamer (throttled/deferred
+  // internally), so each tool boundary re-renders the growing bullet list. A
+  // no-op when the feature is off or there's nothing to show yet.
+  function pushTraceDisplay(): void {
+    if (!traceStreamer) return;
+    const body = renderLiveTrace();
+    if (body) void traceStreamer.setContent(body);
   }
 
   try {
@@ -233,7 +269,10 @@ async function runTurn(opts: {
             }
             // Accumulate text deltas for the trace; flush on tool boundaries and at the end.
             traceTextAccum += ev.delta;
-            if (traceTextAccum.length > 2000) flushTraceText();
+            if (traceTextAccum.length > 2000) {
+              flushTraceText();
+              pushTraceDisplay();
+            }
             break;
           case "thinking":
             indicator.activity();
@@ -249,6 +288,7 @@ async function runTurn(opts: {
             // Flush any accumulated text/thinking before this tool call.
             flushTraceText();
             flushTraceThinking();
+            pushTraceDisplay();
             pushTrace("tool", { name: ev.name, summary: ev.summary });
             break;
           case "toolResult":
@@ -316,12 +356,33 @@ async function runTurn(opts: {
                 }
               }
 
-              // Deliver the complete, rich, authoritative final answer as Message 2 with next-action buttons below it.
-              if (ev.text) {
-                const full = extractNextActions(ev.text).cleaned.trim();
-                if (full) {
-                  await sendRichText(api, chatId, full, replyMarkup);
+              // Deliver the complete, rich, authoritative final answer with
+              // next-action buttons below it. When the trace-text feature is on,
+              // the live "执行过程" message that grew block-by-block during the
+              // run is finalized into this same message holding the full process
+              // list plus the summary plus the buttons (one message, no jarring
+              // collapse — the final answer never appeared mid-stream).
+              let finalText = ev.text ? extractNextActions(ev.text).cleaned.trim() : "";
+              if (traceStreamer) {
+                // CRITICAL ordering: flush the final round's narration into
+                // traceTexts BEFORE buildTraceReply, so its "drop the last
+                // block" dedup drops the final round (which ≈ summary) instead
+                // of a legitimate intermediate block. (Pre-fix the final round's
+                // text was still in traceTextAccum and only flushed after this
+                // branch, so the dedup dropped the wrong block and the final
+                // round — which ≈ summary — survived as a duplicate bullet.)
+                flushTraceText();
+                if (finalText) {
+                  finalText = buildTraceReply(traceTexts, finalText);
+                } else {
+                  // No summary (edge: empty result) — leave the live process
+                  // list as the final body rather than an empty message.
+                  finalText = renderLiveTrace();
                 }
+                if (finalText) await traceStreamer.setContent(finalText);
+                await traceStreamer.finalize(replyMarkup);
+              } else if (finalText) {
+                await sendRichText(api, chatId, finalText, replyMarkup);
               }
 
               if (ev.contextUsagePct !== undefined) {
@@ -420,6 +481,21 @@ async function runTurn(opts: {
     // Safety net: deny any approval prompt still open for this chat (e.g. the
     // task aborted while waiting on a tap).
     approvalManager.cancelForChat(chatId, api);
+    // Finalize the live "执行过程" message. No-op when the feature is off, and
+    // idempotent when the success branch already finalized it (the finalize()
+    // guard returns early). For a terminal error/abort/turns-exhausted it pins
+    // the last live render as the final state — pushing the latest flushed
+    // blocks first so a partial final narration shows as a last bullet instead
+    // of leaving the message mid-render. Between retries this doesn't run, so
+    // the streamer stays live and the retried attempt appends to it.
+    if (traceStreamer) {
+      try {
+        pushTraceDisplay();
+        await traceStreamer.finalize();
+      } catch {
+        /* best effort — never block the return on a telegram edit failure */
+      }
+    }
   }
 
   return {
@@ -608,6 +684,43 @@ export function shouldSendFinalAnswer(answer: string, lastRoundBody: string): bo
   const a = answer.trim();
   if (!a) return false;
   return a !== lastRoundBody.trim();
+}
+
+/**
+ * Build the final reply when `claude.showTraceText` is on: prepend the
+ * intermediate narration blocks from the execution trace (`text` trace events),
+ * separated by divider lines, before the summary.
+ *
+ * The last traced text block for a run is the final round's narration, which
+ * essentially duplicates `summary`, so it's excluded — only what happened
+ * *between* the intermediate steps is appended. If there are no meaningful
+ * intermediate blocks (e.g. a single-round run), the summary is returned
+ * unchanged so nothing is disturbed.
+ */
+export function buildTraceReply(texts: string[], summary: string): string {
+  const s = summary.trim();
+  const intermediate = texts.length > 1 ? texts.slice(0, -1) : [];
+  const lists = intermediate
+    .map((t) => toBulletList(t.trim()))
+    .filter(Boolean);
+  if (lists.length === 0) return s;
+  return `**执行过程**\n\n${lists.join("\n\n---\n\n")}\n\n---\n\n${s}`;
+}
+
+/**
+ * Render one narration block as a Markdown unordered list: one bullet per
+ * non-blank line. Existing list markers ("- ", "* ", "1. ") are stripped first
+ * so we never emit double bullets, and plain prose lines just gain a "- "
+ * prefix. Blank lines collapse so the list stays tight.
+ */
+function toBulletList(text: string): string {
+  return text
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => l.replace(/^[-*+]\s+|^\d+\.\s+/, "").trim())
+    .map((l) => `- ${l}`)
+    .join("\n");
 }
 
 /**

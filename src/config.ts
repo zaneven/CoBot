@@ -52,6 +52,11 @@ export interface Config {
      *  run all the way to the wall-clock watchdog. Falls back to
      *  DEFAULT_MAX_TURNS when neither env nor yaml sets a value. */
     maxTurns?: number;
+    /** When on, the final reply also carries the intermediate narration text
+     *  blocks from the execution trace (admin "详细执行轨迹" text events),
+     *  separated by divider lines, so the user can see what was done between
+     *  the intermediate steps and the final summary. */
+    showTraceText?: boolean;
     /** Per-day spend ceiling per chat (USD). When exceeded, new tasks are
      *  rejected with a notice. Undefined = no cap. */
     dailyCostCapUsd?: number;
@@ -77,7 +82,7 @@ export interface Config {
 export interface YamlConfig {
   projects?: string[];
   devRoots?: string[];
-  defaults?: { model?: string; maxTurns?: number; taskTimeoutMs?: number; dailyCostCapUsd?: number; dailyTokenCap?: number };
+  defaults?: { model?: string; maxTurns?: number; taskTimeoutMs?: number; dailyCostCapUsd?: number; dailyTokenCap?: number; showTraceText?: boolean };
   telegram?: {
     botToken?: string;
     allowedUsers?: number[] | string;
@@ -271,6 +276,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
       ),
       dailyCostCapUsd: envNum("COBOT_DAILY_COST_CAP_USD") ?? yaml.defaults?.dailyCostCapUsd,
       dailyTokenCap: envNum("COBOT_DAILY_TOKEN_CAP") ?? yaml.defaults?.dailyTokenCap,
+      showTraceText: yaml.defaults?.showTraceText ?? false,
       approval,
     },
     admin,

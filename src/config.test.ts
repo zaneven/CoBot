@@ -40,6 +40,31 @@ test("loadConfig: parses botToken and allowedUsers directly from yaml", () => {
   }
 });
 
+test("loadConfig: reads defaults.showTraceText (default false)", () => {
+  const tmpPath = resolve(process.cwd(), "config.test.trace.yaml");
+  writeFileSync(
+    tmpPath,
+    "telegram:\n  botToken: 'yaml-token-123'\ndevRoots: ['/dev']\ndefaults:\n  showTraceText: true\n",
+    "utf8",
+  );
+
+  try {
+    const config = loadConfig(tmpPath);
+    assert.equal(config.claude.showTraceText, true);
+  } finally {
+    if (existsSync(tmpPath)) unlinkSync(tmpPath);
+  }
+
+  // Unset -> defaults to false.
+  const tmpPath2 = resolve(process.cwd(), "config.test.trace2.yaml");
+  writeFileSync(tmpPath2, "telegram:\n  botToken: 'yaml-token-123'\n", "utf8");
+  try {
+    assert.equal(loadConfig(tmpPath2).claude.showTraceText, false);
+  } finally {
+    if (existsSync(tmpPath2)) unlinkSync(tmpPath2);
+  }
+});
+
 test("loadConfig: default admin config has host 127.0.0.1 and empty apiKey", () => {
   const tmpPath = resolve(process.cwd(), "config.test.admin.yaml");
   writeFileSync(

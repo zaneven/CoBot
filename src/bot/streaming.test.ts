@@ -39,6 +39,18 @@ class StubApi {
     this.deleted.push(msgId);
     return true;
   };
+
+  /** Replies-markup edits (the button-attach fallback finalize uses). */
+  replyMarkupEdits: Array<{ msgId: number; options: any }> = [];
+  editMessageReplyMarkup = async (
+    _chatId: number,
+    msgId: number,
+    _inlineMessageId: string | undefined,
+    extra?: Record<string, unknown>,
+  ): Promise<true> => {
+    this.replyMarkupEdits.push({ msgId, options: extra });
+    return true;
+  };
 }
 
 
@@ -358,4 +370,117 @@ test("content with $$ \\LaTeX $$ uses rich send", async () => {
   await streamer.text("Result: $$E=mc^2$$ is correct");
   await streamer.flush();
   assert.equal(api.richSent.length, 1);
+});
+
+// ── setContent: whole-body replace (drives the live "执行过程" bullet list) ─
+
+test("setContent replaces the whole body each call, not appends", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  // A caller drives it each tick as the completed-block list grows.
+  await streamer.setContent("**执行过程**\n\n- step one");
+  await streamer.setContent("**执行过程**\n\n- step one\n\n---\n\n- step two");
+  await streamer.finalize();
+  assert.equal(api.richSent.length, 1, "single logical message");
+  const out = api.richSent[0].rich_message.markdown;
+  assert.ok(out.includes("- step two"), "latest body present");
+  // Replace semantics: "step one" appears exactly once, not duplicated by append.
+  assert.equal((out.match(/step one/g) || []).length, 1, "setContent replaced — no append duplication");
+});
+
+test("setContent is a no-op on empty input (caller may drive it each tick)", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  await streamer.setContent(""); // nothing to show yet — common before the first block
+  await streamer.setContent("");
+  await streamer.finalize();
+  assert.equal(api.richSent.length, 0, "no rich message for empty content");
+  assert.equal(api.sent.length, 0, "no plain/HTML fallback either");
+});
+
+test("setContent is a no-op after finalize", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  await streamer.setContent("- first");
+  await streamer.finalize();
+  const sentBefore = api.richSent.length;
+  await streamer.setContent("- second"); // ignored — already finalized
+  assert.equal(api.richSent.length, sentBefore, "no re-render after finalize");
+  assert.ok(!api.richSent[0].rich_message.markdown.includes("second"));
+});
+
+// ── finalize(replyMarkup): button-attach fallback for Rich Messages ────────
+// Rich Messages silently drop reply_markup, so finalize re-attaches the
+// keyboard via editMessageReplyMarkup, mirroring sendRichText in send.ts.
+
+test("finalize attaches reply_markup to the last rich message via editMessageReplyMarkup", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  const kb = { inline_keyboard: [[{ text: "继续", callback_data: "x" }]] };
+  await streamer.setContent("done");
+  await streamer.finalize(kb);
+  assert.equal(api.richSent.length, 1, "one rich message");
+  assert.equal(api.replyMarkupEdits.length, 1, "markup attached to the rich message");
+  assert.deepEqual(api.replyMarkupEdits[0].options.reply_markup, kb);
+  // No separate button message — the attach succeeded.
+  assert.equal(
+    api.sent.find((s: { options: any }) => s.options && s.options.reply_markup === kb),
+    undefined,
+    "no fallback button message when attach succeeds",
+  );
+});
+
+test("finalize with no markup does not attempt to attach any", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  await streamer.setContent("done");
+  await streamer.finalize();
+  assert.equal(api.replyMarkupEdits.length, 0, "no markup → no editMessageReplyMarkup call");
+});
+
+test("finalize swallows a benign 'not modified' markup-attach (already attached)", async () => {
+  const api = makeStubApi();
+  api.editMessageReplyMarkup = async () => {
+    throw new Error("Bad Request: message is not modified");
+  };
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  const kb = { inline_keyboard: [[{ text: "继续", callback_data: "x" }]] };
+  await streamer.setContent("done");
+  await streamer.finalize(kb);
+  assert.equal(api.richSent.length, 1, "rich message still sent");
+  // "not modified" is benign → no separate fallback button message.
+  assert.equal(
+    api.sent.find((s: { options: any }) => s.options && s.options.reply_markup === kb),
+    undefined,
+    "no duplicate button message on benign 'not modified'",
+  );
+});
+
+test("finalize falls back to a separate button message when markup attach fails", async () => {
+  const api = makeStubApi();
+  api.editMessageReplyMarkup = async () => {
+    throw new Error("Bad Request: message is too old to edit"); // non-benign
+  };
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  const kb = { inline_keyboard: [[{ text: "继续", callback_data: "x" }]] };
+  await streamer.setContent("done");
+  await streamer.finalize(kb);
+  assert.equal(api.richSent.length, 1, "rich message sent");
+  // A separate plain message carrying the buttons was sent as the fallback.
+  const btnMsg = api.sent.find((s: { options: any }) => s.options && s.options.reply_markup === kb);
+  assert.ok(btnMsg, "a separate message carrying the reply_markup was sent");
+  assert.ok(btnMsg!.text.includes("建议的下一步操作"));
+});
+
+test("finalize is idempotent — a second call is a no-op", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  const kb = { inline_keyboard: [[{ text: "继续", callback_data: "x" }]] };
+  await streamer.setContent("done");
+  await streamer.finalize(kb);
+  const sentBefore = api.richSent.length;
+  const markupBefore = api.replyMarkupEdits.length;
+  await streamer.finalize(kb); // safety-net second call (e.g. from the finally block)
+  assert.equal(api.richSent.length, sentBefore, "no duplicate message on second finalize");
+  assert.equal(api.replyMarkupEdits.length, markupBefore, "no duplicate markup attach on second finalize");
 });

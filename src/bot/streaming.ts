@@ -76,6 +76,25 @@ export class TelegramStreamer {
   }
 
   /**
+   * Replace the whole streamed body (the header is kept). Unlike {@link text},
+   * which appends token deltas, this re-renders the entire logical message from
+   * a fully-composed string each call — for callers that build the content
+   * themselves each tick (e.g. a growing bullet list of completed trace blocks)
+   * instead of feeding raw deltas. Marks dirty and schedules a throttled flush,
+   * so rapid successive calls coalesce into one edit. No-op after finalize()
+   * and on empty input (so a caller can drive it unconditionally each tick and
+   * only the non-empty renders send).
+   */
+  setContent(text: string): Promise<void> {
+    if (this.finished || !text) return Promise.resolve();
+    this.closeThinking();
+    this.content = text;
+    this.dirty = true;
+    this.schedule();
+    return Promise.resolve();
+  }
+
+  /**
    * Reset / discard any preamble text and delete premature messages if any were sent.
    */
   async reset(): Promise<void> {
@@ -267,10 +286,35 @@ export class TelegramStreamer {
   }
 
   async finalize(replyMarkup?: any): Promise<void> {
+    if (this.finished) return; // guard against a second finalize (e.g. finally safety-net)
     this.closeThinking();
     this.finished = true;
     this.finalReplyMarkup = replyMarkup;
     await this.flush();
+    // Rich Messages silently drop reply_markup (buttons never render on a rich
+    // message — same gotcha sendRichText works around), so re-attach the keyboard
+    // via the standard editMessageReplyMarkup after the final flush, falling back
+    // to a separate plain message carrying the buttons when even that fails.
+    // No-op in HTML/plain mode (those transports already attach reply_markup)
+    // and when no keyboard was requested.
+    await this.attachMarkupFallback(replyMarkup);
+  }
+
+  private async attachMarkupFallback(replyMarkup?: any): Promise<void> {
+    if (!replyMarkup || !this.richMode) return;
+    const last = this.msgs[this.msgs.length - 1];
+    if (!last || last.id === undefined) return;
+    try {
+      await (this.api as any).editMessageReplyMarkup(this.chatId, last.id, undefined, { reply_markup: replyMarkup });
+    } catch (err) {
+      if (isBenign(err)) return; // "not modified" — markup already attached, done
+      logger.debug({ err: String(err) }, "streamer: could not attach markup to rich message");
+      try {
+        await this.api.sendMessage(this.chatId, "💡 建议的下一步操作：", { reply_markup: replyMarkup });
+      } catch {
+        /* best effort */
+      }
+    }
   }
 
   /**

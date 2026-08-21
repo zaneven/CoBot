@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../store/db.js";
 import { Registry } from "../registry/registry.js";
-import { submitInteractive, shouldSendFinalAnswer, isRetryableError, isCorruptedResumeError } from "./runs.js";
+import { submitInteractive, shouldSendFinalAnswer, buildTraceReply, isRetryableError, isCorruptedResumeError } from "./runs.js";
 import type { Config } from "../config.js";
 import type { PromptInput } from "../claude/types.js";
 
@@ -161,4 +161,30 @@ test("isCorruptedResumeError: detects the missing-thinking 400 from a broken res
   );
   assert.equal(isCorruptedResumeError(""), false);
   assert.equal(isCorruptedResumeError("API Error: 429 rate limited"), false);
+});
+// ── buildTraceReply ──────────────────────────────────────────────────────────
+
+test("buildTraceReply: returns summary unchanged when there are no intermediate blocks", () => {
+  assert.equal(buildTraceReply([], "final summary"), "final summary");
+  assert.equal(buildTraceReply(["only block"], "only block"), "only block");
+});
+
+test("buildTraceReply: renders each narration block as a bullet, blocks split by ---", () => {
+  const out = buildTraceReply(["step one", "step two", "final summary"], "final summary");
+  assert.equal(out, "**执行过程**\n\n- step one\n\n---\n\n- step two\n\n---\n\nfinal summary");
+});
+
+test("buildTraceReply: turns each line of a multi-line block into its own bullet", () => {
+  const out = buildTraceReply(["first\nsecond", "summary"], "summary");
+  assert.equal(out, "**执行过程**\n\n- first\n- second\n\n---\n\nsummary");
+});
+
+test("buildTraceReply: normalizes existing list markers instead of double-bulleting", () => {
+  const out = buildTraceReply(["- already bulleted\n* star too\n1. numbered", "summary"], "summary");
+  assert.equal(out, "**执行过程**\n\n- already bulleted\n- star too\n- numbered\n\n---\n\nsummary");
+});
+
+test("buildTraceReply: drops the trailing block that duplicates the summary and filters blanks", () => {
+  const out = buildTraceReply(["step one", "   ", "final summary"], "final summary");
+  assert.equal(out, "**执行过程**\n\n- step one\n\n---\n\nfinal summary");
 });

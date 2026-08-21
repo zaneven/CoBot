@@ -382,6 +382,38 @@
     .form-group input::placeholder, .form-group textarea::placeholder { color: var(--text-faint); }
     .form-row { display: flex; gap: 1rem; }
     .form-row .form-group { flex: 1; }
+    /* Boolean setting rows: label on the left, switch on the right, one per line. */
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.68rem 0;
+      border-bottom: 1px solid var(--border-color);
+      margin-bottom: 0.2rem;
+    }
+    .setting-row .setting-label {
+      font-size: 0.82rem;
+      color: var(--text-main);
+      font-weight: 500;
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+    .setting-row .setting-label .hint { font-family: var(--font-mono); color: var(--text-faint); font-size: 0.7rem; font-weight: 400; }
+    /* Switch (checkbox-driven) */
+    .switch { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch .slider {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background: var(--border-strong); transition: 0.2s; border-radius: 24px;
+    }
+    .switch .slider:before {
+      position: absolute; content: ""; height: 18px; width: 18px;
+      left: 3px; bottom: 3px; background: #fff; transition: 0.2s; border-radius: 50%;
+    }
+    .switch input:checked + .slider { background: var(--primary); }
+    .switch input:checked + .slider:before { transform: translateX(18px); }
 
     /* ============ Progress ============ */
     .progress-bar-bg { background: rgba(255, 255, 255, 0.06); border-radius: 3px; height: 6px; width: 100%; overflow: hidden; }
@@ -824,23 +856,24 @@
             <textarea id="cfgAllowedUsers" rows="2" placeholder="例如: 6713836144"></textarea>
           </div>
 
-          <div class="form-row">
-            <div class="form-group">
-              <label for="cfgMaxTurns">单次任务最大轮数 <span class="hint">(maxTurns)</span></label>
-              <input type="number" id="cfgMaxTurns" placeholder="默认 50">
-            </div>
-            <div class="form-group">
-              <label for="cfgTaskTimeout">单次任务超时 <span class="hint">(分钟, taskTimeoutMs)</span></label>
-              <input type="number" step="1" min="1" id="cfgTaskTimeout" placeholder="默认 10">
-            </div>
-            <div class="form-group">
-              <label for="cfgDailyCost">每日消费上限 <span class="hint">($USD)</span></label>
-              <input type="number" step="0.1" id="cfgDailyCost" placeholder="例如 5.0">
-            </div>
-            <div class="form-group">
-              <label for="cfgDailyTokenCap">每日 Token 上限 <span class="hint">(dailyTokenCap)</span></label>
-              <input type="number" step="1000" id="cfgDailyTokenCap" placeholder="例如 200000">
-            </div>
+          <div class="form-group">
+            <label for="cfgMaxTurns">单次任务最大轮数 <span class="hint">(maxTurns)</span></label>
+            <input type="number" id="cfgMaxTurns" placeholder="默认 50">
+          </div>
+
+          <div class="form-group">
+            <label for="cfgTaskTimeout">单次任务超时 <span class="hint">(分钟, taskTimeoutMs)</span></label>
+            <input type="number" step="1" min="1" id="cfgTaskTimeout" placeholder="默认 10">
+          </div>
+
+          <div class="form-group">
+            <label for="cfgDailyCost">每日消费上限 <span class="hint">($USD)</span></label>
+            <input type="number" step="0.1" id="cfgDailyCost" placeholder="例如 5.0">
+          </div>
+
+          <div class="form-group">
+            <label for="cfgDailyTokenCap">每日 Token 上限 <span class="hint">(dailyTokenCap)</span></label>
+            <input type="number" step="1000" id="cfgDailyTokenCap" placeholder="例如 200000">
           </div>
 
           <div class="form-group">
@@ -848,12 +881,26 @@
             <input type="number" id="cfgFlushMs" placeholder="默认 900">
           </div>
 
-          <div class="form-group">
-            <label for="cfgAuthEnabled">API 鉴权保护 <span class="hint">(authEnabled - 刷新页面生效)</span></label>
-            <select id="cfgAuthEnabled">
-              <option value="true">开启 (推荐)</option>
-              <option value="false">关闭 (高风险，局域网裸奔)</option>
-            </select>
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>回复中展示执行过程 <span class="hint">(showTraceText)</span></span>
+              <span style="font-weight:400; color:var(--text-muted); font-size:0.72rem;">开启后，最终回复会附带执行轨迹中的中间叙述块，用分割线间隔</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="cfgShowTraceText">
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>API 鉴权保护 <span class="hint">(authEnabled - 刷新页面生效)</span></span>
+              <span style="font-weight:400; color:var(--text-muted); font-size:0.72rem;">关闭为高风险，局域网裸奔</span>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="cfgAuthEnabled">
+              <span class="slider"></span>
+            </label>
           </div>
 
           <div class="form-group">
@@ -1282,7 +1329,8 @@
           document.getElementById("cfgDailyCost").value = cfg.claude?.dailyCostCapUsd || "";
           document.getElementById("cfgDailyTokenCap").value = cfg.claude?.dailyTokenCap || "";
           document.getElementById("cfgFlushMs").value = cfg.telegram?.flushMs || 900;
-          document.getElementById("cfgAuthEnabled").value = String(cfg.admin?.authEnabled ?? true);
+          document.getElementById("cfgShowTraceText").checked = !!cfg.claude?.showTraceText;
+          document.getElementById("cfgAuthEnabled").checked = cfg.admin?.authEnabled ?? true;
           document.getElementById("cfgDevRoots").value = (cfg.devRoots || []).join("\n");
           document.getElementById("cfgProjects").value = (cfg.projects || []).join("\n");
           document.getElementById("rawYamlBox").value = data.rawYaml || "";
@@ -1302,6 +1350,7 @@
           taskTimeoutMs: Number(document.getElementById("cfgTaskTimeout").value) * 60000 || undefined,
           dailyCostCapUsd: Number(document.getElementById("cfgDailyCost").value) || undefined,
           dailyTokenCap: Number(document.getElementById("cfgDailyTokenCap").value) || undefined,
+          showTraceText: document.getElementById("cfgShowTraceText").checked,
         },
         telegram: {
           botToken: document.getElementById("cfgBotToken").value.trim() || undefined,
@@ -1309,7 +1358,7 @@
           flushMs: Number(document.getElementById("cfgFlushMs").value) || 900,
         },
         admin: {
-          authEnabled: document.getElementById("cfgAuthEnabled").value === "true",
+          authEnabled: document.getElementById("cfgAuthEnabled").checked,
         },
         devRoots: document.getElementById("cfgDevRoots").value.split("\n").map(s => s.trim()).filter(Boolean),
         projects: document.getElementById("cfgProjects").value.split("\n").map(s => s.trim()).filter(Boolean),
