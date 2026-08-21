@@ -229,7 +229,15 @@ cmd_start() {
   if [ -n "${PROXY_URL}" ]; then
     echo "[+] Proxy detected & enabled: ${PROXY_URL}"
   else
-    echo "[!] No HTTP proxy detected. Telegram API outbound calls may require proxy on this network."
+    # Probe direct reachability to Telegram rather than assuming a proxy is
+    # needed — most networks reach Telegram fine, so a blanket "no proxy"
+    # warning would be a false alarm. Only warn when it's actually blocked.
+    if node --input-type=module -e "import https from 'node:https';const r=https.get('https://api.telegram.org/',{timeout:6000},()=>{process.exit(0)});r.on('timeout',()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1));" 2>/dev/null; then
+      echo "[+] Direct connection to Telegram OK (no proxy needed)."
+    else
+      echo "[!] Cannot reach api.telegram.org directly and no proxy configured."
+      echo "    If Telegram is blocked on this network, set COBOT_PROXY in .env (e.g. http://127.0.0.1:7890)."
+    fi
   fi
 
   echo "[+] Launch mode: ${TSX_CMD}"

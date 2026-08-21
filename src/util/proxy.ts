@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import type { Agent } from "node:https";
+import { get as httpsGet, type Agent } from "node:https";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { SocksProxyAgent } from "socks-proxy-agent";
 import { logger } from "./logger.js";
@@ -48,15 +48,41 @@ export function detectProxyUrl(): string | undefined {
   return envProxy() ?? macSystemProxy();
 }
 
+/** Probe whether api.telegram.org answers over a direct connection (no proxy).
+ *  Non-blocking: resolves later so startup isn't delayed. Any HTTP response
+ *  counts as reachable; timeout/error = blocked. The socket is unref'd so this
+ *  never keeps the process alive past shutdown. */
+function probeTelegramDirect(timeoutMs = 6000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = httpsGet("https://api.telegram.org/", { timeout: timeoutMs }, (res) => {
+      res.resume();
+      resolve(true);
+    });
+    req.on("socket", (s) => s.unref());
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.on("error", () => resolve(false));
+  });
+}
+
 /** Create a node-fetch-compatible proxy agent, or undefined for direct. */
 export function createProxyAgent(): Agent | undefined {
   const url = detectProxyUrl();
   if (!url) {
-    logger.warn(
-      "no HTTP proxy detected (checked COBOT_PROXY/HTTPS_PROXY/scutil); " +
-        "Telegram is only reachable via a proxy on this network — bot may hang silently on outbound calls. " +
-        "Set COBOT_PROXY or enable the system proxy.",
-    );
+    // Don't alarm here — a direct connection is the common case (most networks
+    // reach Telegram fine). Fire a background probe so the log reflects the REAL
+    // state instead of a premature "no proxy" warning; the authoritative check
+    // remains bot.init()/getMe()'s 25s timeout in index.ts.
+    void probeTelegramDirect().then((ok) => {
+      if (ok) logger.info("Telegram reachable via direct connection (no proxy needed).");
+      else
+        logger.warn(
+          "Telegram NOT reachable via direct connection and no proxy configured — " +
+            "if the bot hangs, set COBOT_PROXY or enable the system proxy.",
+        );
+    });
     return undefined;
   }
   const agent: Agent = url.startsWith("socks")
