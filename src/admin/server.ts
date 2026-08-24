@@ -126,7 +126,7 @@ export class AdminServer {
       return;
     }
 
-    const port = this.config.admin.port;
+    const preferredPort = this.config.admin.port;
     const host = this.config.admin.host;
 
     // Wire the logger's tee into the admin live-log SSE buffer. Strip ANSI
@@ -150,10 +150,57 @@ export class AdminServer {
       });
     });
 
-    return new Promise((resolve) => {
-      this.server!.listen(port, host, () => {
-        logger.info({ port: this.getPort(), host, apiKeySet: !!this.config.admin.apiKey }, "Admin Web Server started");
-        resolve();
+    // Bind the configured port, auto-falling-back to the next free port on
+    // EADDRINUSE (e.g. another local app already holds it). Previously a port
+    // conflict emitted an 'error' event with no listener and crashed the whole
+    // bot; now we tell the user which port was busy, switch to a free one, and
+    // keep the admin panel reachable. Non-port errors and an exhausted
+    // fallback range degrade without crashing — the Telegram long-polling core
+    // keeps running either way.
+    const bound = await this.tryListen(preferredPort, host, 20);
+    if (bound === null) {
+      logger.error(
+        { configuredPort: preferredPort, host },
+        `Admin Web Server: could not bind ${preferredPort} or any of the next 19 ports — disabling admin panel. The bot itself continues. Free a port or set COBOT_ADMIN_PORT, then restart.`,
+      );
+      try { this.server?.close(); } catch { /* never bound */ }
+      this.server = null;
+      return;
+    }
+    if (bound !== preferredPort) {
+      logger.warn(
+        { configuredPort: preferredPort, port: bound, host },
+        `⚠️ Admin Web Server: configured port ${preferredPort} is in use — switched to free port ${bound}. Admin panel: http://${host}:${bound}`,
+      );
+    }
+    logger.info({ port: bound, host, apiKeySet: !!this.config.admin.apiKey }, "Admin Web Server started");
+  }
+
+  /** Try to listen on `port`, advancing to port+1 … on EADDRINUSE so the panel
+   *  stays reachable when the configured port is already taken. Returns the
+   *  bound port, or null after exhausting `attemptsLeft` / on a non-port error. */
+  private tryListen(port: number, host: string, attemptsLeft: number): Promise<number | null> {
+    if (attemptsLeft <= 0) return Promise.resolve(null);
+    const server = this.server;
+    if (!server) return Promise.resolve(null);
+    return new Promise<number | null>((resolve) => {
+      const onError = (err: NodeJS.ErrnoException) => {
+        server.off("error", onError);
+        if (err.code === "EADDRINUSE") {
+          // Same Server instance can re-listen after a failed bind — the socket
+          // never opened, so advance to the next candidate port.
+          resolve(this.tryListen(port + 1, host, attemptsLeft - 1));
+        } else {
+          logger.error({ err: String(err) }, "Admin Web Server listen error — disabling admin panel.");
+          try { server.close(); } catch { /* never bound */ }
+          this.server = null;
+          resolve(null);
+        }
+      };
+      server.on("error", onError);
+      server.listen(port, host, () => {
+        server.off("error", onError);
+        resolve(port);
       });
     });
   }
