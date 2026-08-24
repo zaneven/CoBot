@@ -67,7 +67,8 @@ Thumbs.db
 *~
 
 # ── CI/CD & Platform Configs ──────────────────────────────────────────────────
-.github/
+# NOTE: do NOT ignore .github/ — it holds the GitHub Pages deploy workflow.
+#       Ignoring it removes the workflow from the repo and silently breaks Pages.
 .gitlab/
 .gitea/
 
