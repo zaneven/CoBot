@@ -92,7 +92,7 @@ cd CoBot
 |--------|------|---------|
 | **Telegram Bot Token** | 机器人令牌（必填） | [@BotFather](https://t.me/BotFather) 创建机器人 |
 | **Telegram 用户 ID** | 谁能控制机器人（必填，逗号分隔多个） | [@userinfobot](https://t.me/userinfobot) 查询 |
-| **开发根目录** | 其子目录可用 `/bind` 绑定（默认当前目录） | 回车采用默认 |
+| **开发根目录** | 其子目录可用 `/bind` 绑定（默认取本目录的上级，即项目根目录） | 回车采用默认 |
 
 交互完成后自动写入 `.env` 与 `config.yaml`，打印管理面板地址与密钥，**并自动启动机器人**。之后也可手动启动：
 

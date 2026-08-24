@@ -136,7 +136,7 @@ src/
    ```bash
    ./scripts/cobot.sh install
    ```
-   该指令会自动复制配置文件模版、安装 npm 依赖、运行交互式配置（Telegram Token / 用户 ID / 开发根目录，默认取当前目录）、类型检查，注册全局 `cobot` CLI 软链接，**并在配置完成后自动启动 Bot 服务**。
+   该指令会自动复制配置文件模版、安装 npm 依赖、运行交互式配置（Telegram Token / 用户 ID / 开发根目录，默认取项目目录的上级）、类型检查，注册全局 `cobot` CLI 软链接，**并在配置完成后自动启动 Bot 服务**。
 
 2. **全局服务管理命令（可在系统任何目录下运行）**：
    - `cobot start` 或 `./scripts/cobot.sh start`：后台启动 Bot 服务，自动检测并注入代理（如 `127.0.0.1:10808`）。

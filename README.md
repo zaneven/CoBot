@@ -96,7 +96,7 @@ Install drops into an interactive setup — **fill in just three fields** to run
 |-------|------------|-----------------|
 | **Telegram bot token** | the bot's token (required) | create a bot with [@BotFather](https://t.me/BotFather) |
 | **Your Telegram user ID** | who may control the bot (required; comma-separated for several) | query [@userinfobot](https://t.me/userinfobot) |
-| **Dev root directory** | whose subdirectories `/bind` can attach (defaults to the current directory) | press Enter to accept the default |
+| **Dev root directory** | whose subdirectories `/bind` can attach (defaults to this dir's parent — your projects folder) | press Enter to accept the default |
 
 When done, `.env` and `config.yaml` are written, the admin panel URL + key are printed, and the bot is started automatically. To start it again later:
 

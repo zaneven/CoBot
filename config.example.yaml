@@ -13,36 +13,35 @@ projects:
 
 # Streaming display & bot authorization options.
 telegram:
-  botToken: ""          # Telegram Bot Token (e.g. 123456789:ABCDefgh...)
+  botToken: "" # Telegram Bot Token (e.g. 123456789:ABCDefgh...)
   allowedUsers: [12345678] # Whitelisted Telegram User IDs allowed to control the bot
-  maxEditChars: 3500  # chars before appending a new chunk message
-  pollTimeout: 30      # long-poll timeout (seconds)
-  flushMs: 900         # ms between streamed edits
+  maxEditChars: 3500 # chars before appending a new chunk message
+  pollTimeout: 30 # long-poll timeout (seconds)
+  flushMs: 900 # ms between streamed edits
 
 # Interactive tool-call approval. Override per-chat at runtime with /approve.
 # env: COBOT_APPROVAL_MODE, COBOT_APPROVAL_TIMEOUT_MS, COBOT_APPROVAL_TIMEOUT_ACTION,
 #      COBOT_APPROVAL_SKIP_TOOLS (comma-separated).
 approval:
-  mode: auto            # auto = headless auto-approve; interactive = prompt for mutating tools
-  timeoutMs: 300000     # per-request approval timeout (must be < taskTimeoutMs)
-  timeoutAction: allow  # decision when the user doesn't respond: allow | deny
-  skipTools: [Read, LS, Glob, Grep, TodoWrite]  # never prompt for these (read-only)
+  mode: auto # auto = headless auto-approve; interactive = prompt for mutating tools
+  timeoutMs: 300000 # per-request approval timeout (must be < taskTimeoutMs)
+  timeoutAction: allow # decision when the user doesn't respond: allow | deny
+  skipTools: [Read, LS, Glob, Grep, TodoWrite] # never prompt for these (read-only)
 
 # Defaults applied to every Claude run unless overridden by env / a /run flag.
 defaults:
-  # maxTurns: omit → conservative default (DEFAULT_MAX_TURNS = 50).
-  # Set a number to cap agentic turns per task; 0 = unlimited (SDK default).
-  # taskTimeoutMs: hard per-task wall-clock timeout in ms before the watchdog
-  # interrupts it. Default 600000 (10 min). Env CLAUDE_TASK_TIMEOUT_MS overrides.
-  # Must be > approval.timeoutMs; adjusted live from the admin panel (in minutes).
-  # dailyCostCapUsd / dailyTokenCap: optional per-chat daily ceilings.
-  # When exceeded, new tasks are rejected with a notice. Undefined = no cap.
-  dailyCostCapUsd: 5.0    # example: $5 per chat per day
-  dailyTokenCap: 200000  # example: 200k tokens per chat per day
+  # model: "claude-3-7-sonnet-20250219" # default Claude model (env CLAUDE_MODEL overrides)
+  maxTurns: 50 # cap on agentic turns per task (DEFAULT_MAX_TURNS = 50, 0 = unlimited)
+  taskTimeoutMs: 600000 # hard per-task wall-clock timeout in ms (default 10 min, must be > approval.timeoutMs)
+  dailyCostCapUsd: 200.0 # example: $5 per chat per day (undefined = no cap)
+  dailyTokenCap: 20000000 # example: 200k tokens per chat per day (undefined = no cap)
+  showTraceText: true # true = include intermediate narration trace text blocks in the final reply
 
 # Built-in Web Admin Panel configuration
 admin:
-  enabled: true          # true = start Web Admin HTTP server on startup
-  host: "127.0.0.1"      # HTTP listen host
-  port: 8085             # HTTP listen port
-  apiKey: ""             # Secret key for Admin API bearer authentication
+  enabled: true # true = start Web Admin HTTP server on startup
+  host: "127.0.0.1" # HTTP listen host
+  port: 8085 # HTTP listen port
+  authEnabled: true # whether bearer token authentication is required (default: true)
+  apiKey: "" # Secret key for Admin API bearer authentication
+

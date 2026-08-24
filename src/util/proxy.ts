@@ -24,8 +24,16 @@ function envProxy(): string | undefined {
 }
 
 function macSystemProxy(): string | undefined {
+  // scutil is macOS-only. On Linux the shell prints "/bin/sh: scutil: command
+  // not found" into the startup log for no value — short-circuit before the
+  // exec so non-mac hosts never spawn it. stdio stderr=ignore is a further
+  // guard against scutil diagnostics leaking on macOS.
+  if (process.platform !== "darwin") return undefined;
   try {
-    const out = execSync("scutil --proxy", { timeout: 2000 }).toString();
+    const out = execSync("scutil --proxy", {
+      timeout: 2000,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).toString();
     const get = (re: RegExp): string | undefined => {
       const m = out.match(re);
       return m?.[1]?.trim();

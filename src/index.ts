@@ -21,7 +21,11 @@ async function main(): Promise<void> {
   if (config.allowedUsers.size === 0) {
     logger.warn("TELEGRAM_ALLOWED_USERS is empty — the bot will ignore everyone. Set it in .env.");
   }
-  if (config.projects.length === 0) {
+  // devRoots' subdirectories are bindable too (isPathAllowed accepts any path
+  // at/under a dev root), so this warning is only real when NEITHER an explicit
+  // projects list NOR a dev root is configured — otherwise a fresh install
+  // with a devRoot set would false-alarm "/bind will refuse all paths".
+  if (config.projects.length === 0 && config.devRoots.length === 0) {
     logger.warn("No projects whitelisted in config.yaml — /bind will refuse all paths.");
   }
 

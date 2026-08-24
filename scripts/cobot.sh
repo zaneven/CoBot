@@ -125,7 +125,11 @@ cmd_install() {
   # 2. Install npm packages
   export_proxy_env
   echo "[+] Installing npm dependencies..."
-  npm install
+  # --no-fund/--no-audit silence the funding & vulnerability notices (not
+  # actionable for a first-time installer); --loglevel=error hides deprecation
+  # warnings and the "added N packages" summary so the log stays focused.
+  # Real install errors still surface to stderr.
+  npm install --no-fund --no-audit --loglevel=error
 
   # 3. Interactive configuration — only the essentials; everything else keeps
   #    its default so the bot can start right after install. Skipped in
@@ -144,11 +148,16 @@ cmd_install() {
 
   # 4. Typecheck
   echo "[+] Running typecheck..."
-  npm run typecheck
+  # --silent drops npm's `> cobot@… typecheck` / `> tsc --noEmit` banner lines;
+  # tsc prints nothing on success and its errors still surface on failure.
+  npm run typecheck --silent
 
   # 5. Register global 'cobot' command
   echo "[+] Registering global 'cobot' CLI command..."
-  npm link --force 2>/dev/null || true
+  # Fully silenced: `npm link` prints "up to date, audited 3 packages…" noise
+  # that's useless here. Our own echo above is the user-facing confirmation; a
+  # link failure is non-fatal (we fall back to direct symlinks below).
+  npm link --force --no-fund --no-audit --silent >/dev/null 2>&1 || true
 
   # Also attempt to create direct symlink in system/user PATH
   local target_bin=""

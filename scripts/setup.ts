@@ -377,14 +377,52 @@ function verifyWritten(expected: { token: string; users: string; devRoot: string
   }
 }
 
+/** Display width of a string in a monospace terminal: CJK / fullwidth chars
+ *  count as 2 columns, everything else as 1. `String.length` counts a CJK
+ *  char as 1, so a hand-padded box line containing Chinese ends up short of
+ *  the right border and the trailing ║ misaligns. Padding by display width
+ *  instead keeps both borders aligned. */
+function displayWidth(str: string): number {
+  let w = 0;
+  for (const ch of str) {
+    const c = ch.codePointAt(0) ?? 0;
+    if (
+      (c >= 0x1100 && c <= 0x115f) || // Hangul Jamo
+      (c >= 0x2e80 && c <= 0x303e) || // CJK radicals & Kangxi
+      (c >= 0x3040 && c <= 0x33ff) || // Hiragana/Katakana/CJK symbols
+      (c >= 0x3400 && c <= 0x4dbf) || // CJK Unified Ideographs Extension A
+      (c >= 0x4e00 && c <= 0x9fff) || // CJK Unified Ideographs
+      (c >= 0xa000 && c <= 0xa4cf) || // Yi
+      (c >= 0xac00 && c <= 0xd7a3) || // Hangul Syllables
+      (c >= 0xf900 && c <= 0xfaff) || // CJK Compatibility Ideographs
+      (c >= 0xfe30 && c <= 0xfe6f) || // CJK Compatibility Forms
+      (c >= 0xff00 && c <= 0xff60) || // Fullwidth Forms (incl. ，)
+      (c >= 0xffe0 && c <= 0xffe6) || // Fullwidth signs
+      (c >= 0x20000 && c <= 0x2fffd) // CJK Extension B+
+    ) {
+      w += 2;
+    } else {
+      w += 1;
+    }
+  }
+  return w;
+}
+
+/** Two-line banner whose right border always lines up: pad each line to the
+ *  widest line's DISPLAY width (not .length) so CJK content doesn't leave the
+ *  right ║ short. */
+function box(line1: string, line2: string): string {
+  const inner = Math.max(displayWidth(line1), displayWidth(line2));
+  const pad = (s: string) => s + " ".repeat(inner - displayWidth(s));
+  const bar = "═".repeat(inner);
+  return `╔${bar}╗\n║${pad(line1)}║\n║${pad(line2)}║\n╚${bar}╝`;
+}
+
 async function main(): Promise<void> {
   ensureTemplates();
 
   console.log("");
-  console.log("╔══════════════════════════════════════════════╗");
-  console.log("║  CoBot 交互式配置                             ║");
-  console.log("║  只需填写以下必要项，其余保持默认即可启动      ║");
-  console.log("╚══════════════════════════════════════════════╝");
+  console.log(box("  CoBot 交互式配置", "  只需填写以下必要项，其余保持默认即可启动"));
   console.log("");
   console.log("提示：回车 = 采用方括号内默认值\n");
 
@@ -402,10 +440,17 @@ async function main(): Promise<void> {
     validate: validateUsers,
   });
 
-  // Default the dev root to the current working directory (i.e. `pwd` — the
-  // install directory the user is in). The user can type any other path;
-  // Enter accepts this default. Mirrors how the bot resolves config (cwd).
-  const defaultRoot = cur.devRoot || process.cwd();
+  // Default the dev root to the project root's PARENT — that folder's
+  // immediate subdirectories (one of which is CoBot itself) are the projects
+  // /bind can attach, which is exactly what a devRoot is for. The shipped
+  // config.example.yaml holds the placeholder `/Users/YOU/Develop`, so on a
+  // fresh install config.yaml still carries that placeholder — a path that
+  // doesn't exist on THIS machine. Ignore it and derive a real default (the
+  // repo's parent dir) so Enter just works. A previously-configured,
+  // still-existing root is kept so re-runs pre-fill the user's real choice
+  // instead of clobbering it.
+  const keepConfigured = cur.devRoot && validateDevRoot(cur.devRoot) === null;
+  const defaultRoot = keepConfigured ? cur.devRoot : dirname(ROOT_DIR);
   const devRoot = await ask("3/3  开发根目录（其子目录可用 /bind 绑定）", {
     def: defaultRoot,
     validate: validateDevRoot,
