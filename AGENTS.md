@@ -136,13 +136,14 @@ src/
    ```bash
    ./scripts/cobot.sh install
    ```
-   该指令会自动复制配置文件模版、安装 npm 依赖、检查重构 SQLite 原生 C++ 模块，并自动注册全局 `cobot` 命令行软链接。
+   该指令会自动复制配置文件模版、安装 npm 依赖、运行交互式配置（Telegram Token / 用户 ID / 开发根目录，默认取当前目录）、类型检查，注册全局 `cobot` CLI 软链接，**并在配置完成后自动启动 Bot 服务**。
 
 2. **全局服务管理命令（可在系统任何目录下运行）**：
    - `cobot start` 或 `./scripts/cobot.sh start`：后台启动 Bot 服务，自动检测并注入代理（如 `127.0.0.1:10808`）。
    - `cobot stop` 或 `./scripts/cobot.sh stop`：平滑关闭进程并清理 SQLite 数据库中因中断残留的任务锁。
    - `cobot restart` 或 `./scripts/cobot.sh restart`：安全重启 Bot 服务。
    - `cobot status` 或 `./scripts/cobot.sh status`：查看服务 PID 状态、代理连通及 `bot.log` 运行日志。
+   - `cobot uninstall` 或 `./scripts/cobot.sh uninstall`：停止服务并移除全局 `cobot` CLI 与 `node_modules`/`dist`/`data`/日志/`config.yaml`/`.env`（源码目录保留）。加 `--yes` 跳过确认提示。
 
 ---
 

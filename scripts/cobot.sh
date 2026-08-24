@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # CoBot Control Script
-# Usage: ./scripts/cobot.sh [install|start|stop|restart|status]
+# Usage: ./scripts/cobot.sh [install|start|stop|restart|status|uninstall] [--yes]
 #
 
 set -e
@@ -130,9 +130,14 @@ cmd_install() {
   # 3. Interactive configuration — only the essentials; everything else keeps
   #    its default so the bot can start right after install. Skipped in
   #    non-interactive shells (CI/piped stdin) so `install` stays scriptable.
+  local setup_ok=0
   if [ -t 0 ]; then
     echo "[+] Interactive configuration..."
-    npx tsx scripts/setup.ts || echo "[!] Setup skipped — edit .env and config.yaml manually before starting."
+    if npx tsx scripts/setup.ts; then
+      setup_ok=1
+    else
+      echo "[!] Setup skipped — edit .env and config.yaml manually before starting."
+    fi
   else
     echo "[!] Non-interactive shell detected — skipping setup. Run 'npx tsx scripts/setup.ts' to configure."
   fi
@@ -162,12 +167,27 @@ cmd_install() {
 
   echo "=========================================="
   echo " CoBot Install Complete!"
-  echo " You can now run 'cobot <command>' from any directory:"
-  echo "   cobot start    - Start CoBot service"
-  echo "   cobot stop     - Stop CoBot service"
-  echo "   cobot restart  - Restart CoBot service"
-  echo "   cobot status   - View CoBot status & logs"
+  echo " Global 'cobot' CLI registered. Commands:"
+  echo "   cobot start     - Start CoBot service"
+  echo "   cobot stop      - Stop CoBot service"
+  echo "   cobot restart   - Restart CoBot service"
+  echo "   cobot status    - View CoBot status & logs"
+  echo "   cobot uninstall - Remove CoBot (CLI + deps + data + config)"
   echo "=========================================="
+
+  # 6. Auto-start the bot so a fresh install is ready to use immediately — but
+  #    only when setup actually succeeded (interactive shell, config filled
+  #    in); otherwise the bot would fail to start without a token. A launch
+  #    failure is caught so a bot that won't start doesn't mask a successful
+  #    install (the install itself still reports success).
+  if [ "${setup_ok}" = "1" ]; then
+    echo ""
+    echo "[+] Starting CoBot..."
+    cmd_start || echo "[!] Auto-start did not succeed. Run 'cobot start' after fixing the issue (see ${LOG_FILE})."
+  else
+    echo ""
+    echo "[i] Fill in config.yaml, then run 'cobot start'."
+  fi
 }
 
 cmd_stop() {
@@ -229,15 +249,16 @@ cmd_start() {
   if [ -n "${PROXY_URL}" ]; then
     echo "[+] Proxy detected & enabled: ${PROXY_URL}"
   else
-    # Probe direct reachability to Telegram rather than assuming a proxy is
-    # needed — most networks reach Telegram fine, so a blanket "no proxy"
-    # warning would be a false alarm. Only warn when it's actually blocked.
-    if node --input-type=module -e "import https from 'node:https';const r=https.get('https://api.telegram.org/',{timeout:6000},()=>{process.exit(0)});r.on('timeout',()=>{r.destroy();process.exit(1)});r.on('error',()=>process.exit(1));" 2>/dev/null; then
-      echo "[+] Direct connection to Telegram OK (no proxy needed)."
-    else
-      echo "[!] Cannot reach api.telegram.org directly and no proxy configured."
-      echo "    If Telegram is blocked on this network, set COBOT_PROXY in .env (e.g. http://127.0.0.1:7890)."
-    fi
+    # No shell-level reachability probe here. The bot itself probes
+    # api.telegram.org at startup (src/util/proxy.ts) and logs the real
+    # result — visible in the startup log preview below. A second probe here
+    # used to race that check: its 6s timeout produced false "Cannot reach
+    # Telegram" alarms even on reachable networks (a cold DNS + TLS handshake
+    # can exceed the budget), which then contradicted the bot's own
+    # "reachable" log line. The bot's authoritative probe is the source of
+    # truth — trust it instead of re-probing (and possibly mis-probing) here.
+    echo "[+] No proxy configured (direct connection). Telegram reachability is probed at startup — see the log preview below."
+    echo "    If Telegram is blocked on this network, set COBOT_PROXY in .env (e.g. http://127.0.0.1:7890)."
   fi
 
   echo "[+] Launch mode: ${TSX_CMD}"
@@ -261,7 +282,7 @@ cmd_start() {
     echo "[+] CoBot is running and ready."
   else
     echo "[!] CoBot failed to start. Check ${LOG_FILE} for errors."
-    exit 1
+    return 1
   fi
 }
 
@@ -298,6 +319,73 @@ cmd_status() {
   fi
 }
 
+cmd_uninstall() {
+  local confirm="${1:-}"
+
+  echo "=========================================="
+  echo " Uninstalling CoBot"
+  echo "=========================================="
+
+  # Confirm before deleting config (holds the bot token) + data. In a
+  # non-interactive shell require an explicit --yes so CI/piped runs can't
+  # silently wipe a working install.
+  if [ "${confirm}" != "--yes" ] && [ "${confirm}" != "-y" ]; then
+    if [ -t 0 ]; then
+      echo "This will stop CoBot, remove the global 'cobot' CLI, and delete:"
+      echo "  node_modules · dist · data/ · *.log · config.yaml · .env"
+      echo "The source repo at ${ROOT_DIR} is kept."
+      printf "Proceed? [y/N] "
+      local answer
+      read -r answer 2>/dev/null || answer=""
+      case "${answer}" in
+        y|Y|yes|YES) ;;
+        *) echo "[i] Aborted. Nothing was removed."; return 0 ;;
+      esac
+    else
+      echo "[!] Non-interactive shell — pass '--yes' to uninstall without prompting."
+      echo "    Example: cobot uninstall --yes"
+      return 1
+    fi
+  fi
+
+  # 1. Stop the running bot (graceful SIGTERM, then a hard-kill sweep)
+  echo "[+] Stopping CoBot..."
+  cmd_stop 2>/dev/null || true
+
+  # 2. Remove the global 'cobot' CLI — both the npm link and the direct
+  #    symlinks cmd_install may have dropped into system/user PATH dirs.
+  echo "[+] Removing global 'cobot' CLI..."
+  npm uninstall -g cobot 2>/dev/null || true
+  local bin
+  for bin in /usr/local/bin/cobot "${HOME}/.local/bin/cobot" "${HOME}/bin/cobot"; do
+    if [ -L "${bin}" ] || [ -f "${bin}" ]; then
+      rm -f "${bin}" && echo "    removed ${bin}" || true
+    fi
+  done
+
+  # 3. Remove runtime & build artifacts
+  echo "[+] Removing runtime & build artifacts..."
+  rm -rf "${ROOT_DIR}/node_modules" "${ROOT_DIR}/dist" "${ROOT_DIR}/data" 2>/dev/null || true
+  rm -f "${ROOT_DIR}/bot.log" "${ROOT_DIR}/test.log" 2>/dev/null || true
+
+  # 4. Remove config (holds your bot token). The example templates stay, so a
+  #    later reinstall regenerates config.yaml/.env via setup.
+  if [ -f "${ROOT_DIR}/config.yaml" ]; then
+    rm -f "${ROOT_DIR}/config.yaml"
+    echo "[+] Removed config.yaml"
+  fi
+  if [ -f "${ROOT_DIR}/.env" ]; then
+    rm -f "${ROOT_DIR}/.env"
+    echo "[+] Removed .env"
+  fi
+
+  echo "=========================================="
+  echo " CoBot Uninstalled"
+  echo " The source directory remains: ${ROOT_DIR}"
+  echo " Remove it entirely with:  rm -rf \"${ROOT_DIR}\""
+  echo "=========================================="
+}
+
 # ── Main Entry ───────────────────────────────────────────────────────────────
 
 case "${1:-}" in
@@ -316,17 +404,21 @@ case "${1:-}" in
   status)
     cmd_status
     ;;
+  uninstall)
+    cmd_uninstall "${2:-}"
+    ;;
   *)
     echo "CoBot Management Script"
     echo ""
-    echo "Usage: $0 {install|start|stop|restart|status}"
+    echo "Usage: $0 {install|start|stop|restart|status|uninstall} [--yes]"
     echo ""
     echo "Commands:"
-    echo "  install  - Install dependencies, create config templates, check native SQLite bindings."
-    echo "  start    - Start CoBot service in background with proxy auto-injection."
-    echo "  stop     - Gracefully stop CoBot process and clear SQLite task locks."
-    echo "  restart  - Restart CoBot service."
-    echo "  status   - Check running status and recent logs."
+    echo "  install   - Install deps, create config, interactive setup, link CLI, then start."
+    echo "  start     - Start CoBot service in background with proxy auto-injection."
+    echo "  stop      - Gracefully stop CoBot process and clear SQLite task locks."
+    echo "  restart   - Restart CoBot service."
+    echo "  status    - Check running status and recent logs."
+    echo "  uninstall - Stop CoBot, remove global CLI, delete deps/data/config. (--yes skips prompt)"
     exit 1
     ;;
 esac

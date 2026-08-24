@@ -61,6 +61,7 @@ Claude Code is a powerful agentic coding tool — but it lives in your terminal.
 - [Web admin console](#web-admin-console)
 - [Development](#development)
 - [FAQ](#faq)
+- [Uninstall](#uninstall)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
@@ -86,7 +87,7 @@ Claude Code is a powerful agentic coding tool — but it lives in your terminal.
 git clone https://github.com/zaneven/CoBot.git
 cd CoBot
 ./scripts/cobot.sh install
-# copies config templates · installs deps · interactive setup · links the global `cobot` CLI
+# copies config templates · installs deps · interactive setup · links the global `cobot` CLI · starts the bot
 ```
 
 Install drops into an interactive setup — **fill in just three fields** to run, everything else stays at its default:
@@ -95,9 +96,9 @@ Install drops into an interactive setup — **fill in just three fields** to run
 |-------|------------|-----------------|
 | **Telegram bot token** | the bot's token (required) | create a bot with [@BotFather](https://t.me/BotFather) |
 | **Your Telegram user ID** | who may control the bot (required; comma-separated for several) | query [@userinfobot](https://t.me/userinfobot) |
-| **Dev root directory** | whose subdirectories `/bind` can attach (defaults to the project's parent) | press Enter to accept the default |
+| **Dev root directory** | whose subdirectories `/bind` can attach (defaults to the current directory) | press Enter to accept the default |
 
-When done, `.env` and `config.yaml` are written for you and the admin panel URL + key are printed. Then:
+When done, `.env` and `config.yaml` are written, the admin panel URL + key are printed, and the bot is started automatically. To start it again later:
 
 ```bash
 cobot start
@@ -399,6 +400,17 @@ A previous bot instance is still polling. CoBot retries automatically; if it per
 
 No. CoBot drives your **local** Claude Code via the Agent SDK. Source files, prompts, and session state stay on the host. Only the chat traffic to Telegram traverses the network.
 </details>
+
+---
+
+## Uninstall
+
+```bash
+cobot uninstall          # interactive confirm
+cobot uninstall --yes    # skip the prompt (CI / scripts)
+```
+
+Removes the global `cobot` CLI, `node_modules`, `dist`, `data/`, logs, `config.yaml`, and `.env`. The source repo is kept — delete it with `rm -rf` if you want it gone too.
 
 ---
 

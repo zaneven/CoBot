@@ -58,6 +58,7 @@ Claude Code 是很强的 Agent 编程工具——但它活在你的终端里。*
 - [Web 管理控制台](#web-管理控制台)
 - [开发](#开发)
 - [常见问题](#常见问题)
+- [卸载](#卸载)
 - [参与贡献](#参与贡献)
 - [开源协议](#开源协议)
 
@@ -82,7 +83,7 @@ Claude Code 是很强的 Agent 编程工具——但它活在你的终端里。*
 git clone https://github.com/zaneven/CoBot.git
 cd CoBot
 ./scripts/cobot.sh install
-# 复制配置模板 · 安装依赖 · 交互式配置必要项 · 注册全局 `cobot` CLI
+# 复制配置模板 · 安装依赖 · 交互式配置必要项 · 注册全局 `cobot` CLI · 启动服务
 ```
 
 安装过程会进入交互式配置，**只需填写三项**即可跑起来，其余保持默认：
@@ -91,9 +92,9 @@ cd CoBot
 |--------|------|---------|
 | **Telegram Bot Token** | 机器人令牌（必填） | [@BotFather](https://t.me/BotFather) 创建机器人 |
 | **Telegram 用户 ID** | 谁能控制机器人（必填，逗号分隔多个） | [@userinfobot](https://t.me/userinfobot) 查询 |
-| **开发根目录** | 其子目录可用 `/bind` 绑定（默认项目父目录） | 回车采用默认 |
+| **开发根目录** | 其子目录可用 `/bind` 绑定（默认当前目录） | 回车采用默认 |
 
-交互完成后自动写入 `.env` 与 `config.yaml`，并打印管理面板地址与密钥，随后直接：
+交互完成后自动写入 `.env` 与 `config.yaml`，打印管理面板地址与密钥，**并自动启动机器人**。之后也可手动启动：
 
 ```bash
 cobot start
@@ -395,6 +396,17 @@ src/
 
 不会。CoBot 通过 Agent SDK 驱动**本地** Claude Code，源文件、prompt、会话状态都留在宿主机上。只有发往 Telegram 的聊天流量经过网络。
 </details>
+
+---
+
+## 卸载
+
+```bash
+cobot uninstall          # 交互式确认
+cobot uninstall --yes    # 跳过确认（CI / 脚本）
+```
+
+移除全局 `cobot` CLI、`node_modules`、`dist`、`data/`、日志、`config.yaml` 与 `.env`。源码目录会保留——如需彻底删除，再执行 `rm -rf`。
 
 ---
 

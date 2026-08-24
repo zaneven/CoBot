@@ -402,7 +402,10 @@ async function main(): Promise<void> {
     validate: validateUsers,
   });
 
-  const defaultRoot = cur.devRoot || resolve(ROOT_DIR, "..");
+  // Default the dev root to the current working directory (i.e. `pwd` — the
+  // install directory the user is in). The user can type any other path;
+  // Enter accepts this default. Mirrors how the bot resolves config (cwd).
+  const defaultRoot = cur.devRoot || process.cwd();
   const devRoot = await ask("3/3  开发根目录（其子目录可用 /bind 绑定）", {
     def: defaultRoot,
     validate: validateDevRoot,
