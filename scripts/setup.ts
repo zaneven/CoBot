@@ -2,7 +2,10 @@
 /**
  * Interactive CoBot setup — gathers only the essentials needed to start the
  * bot (Telegram bot token + your user id + a dev-root directory) and writes
- * them into `.env` + `config.yaml`, leaving every other option at its default.
+ * them into `config.yaml` (replacing the template placeholders), leaving every
+ * other option at its default. The token & allowed users live in config.yaml,
+ * not .env — that's where the bot reads them, so writing them there is what
+ * makes a fresh install actually start.
  *
  * Two conditional checks make a fresh install just work:
  *   - admin port: if the configured port is already in use, prompt for a free one
@@ -208,6 +211,14 @@ function setEnvKey(text: string, key: string, value: string): string {
   return `${text.replace(/\n+$/, "")}\n${line}\n`;
 }
 
+/** Remove every (active or commented) KEY=... line from .env text. Used to
+ *  migrate TELEGRAM_BOT_TOKEN / TELEGRAM_ALLOWED_USERS out of .env into
+ *  config.yaml so the YAML value is the single source of truth. */
+function removeEnvKey(text: string, key: string): string {
+  const re = new RegExp(`^\\s*#?\\s*${key}\\s*=`);
+  return text.split("\n").filter((line) => !re.test(line)).join("\n");
+}
+
 /** Read the ACTIVE (uncommented) value of a KEY=value line from .env text. */
 function envActiveValue(text: string, key: string): string {
   const m = text.match(new RegExp(`^\\s*${key}\\s*=\\s*(.*)$`, "m"));
@@ -323,14 +334,6 @@ async function askProxy(): Promise<string> {
 function verifyWritten(expected: { token: string; users: string; devRoot: string; apiKey: string }): void {
   const missing: string[] = [];
 
-  if (!existsSync(ENV_PATH)) {
-    missing.push(`.env 不存在 (${ENV_PATH})`);
-  } else {
-    const text = readFileSync(ENV_PATH, "utf8");
-    if (!envActiveValue(text, "TELEGRAM_BOT_TOKEN")) missing.push(".env 缺少有效的（未注释的）TELEGRAM_BOT_TOKEN");
-    if (!envActiveValue(text, "TELEGRAM_ALLOWED_USERS")) missing.push(".env 缺少有效的（未注释的）TELEGRAM_ALLOWED_USERS");
-  }
-
   if (!existsSync(CONFIG_PATH)) {
     missing.push(`config.yaml 不存在 (${CONFIG_PATH})`);
   } else {
@@ -339,7 +342,24 @@ function verifyWritten(expected: { token: string; users: string; devRoot: string
     // which Array.isArray()/indexing can't inspect (roots[0] would be undefined
     // and the check would throw a false "not written" error). toJSON() reads the
     // real written values back correctly.
-    const cfg = doc.toJSON() as { devRoots?: unknown[]; admin?: { apiKey?: string; port?: unknown } };
+    const cfg = doc.toJSON() as {
+      telegram?: { botToken?: string; allowedUsers?: unknown[] };
+      devRoots?: unknown[];
+      admin?: { apiKey?: string; port?: unknown };
+    };
+
+    // token: must match what was just written — catches a silent write failure.
+    const token = String(cfg.telegram?.botToken ?? "").trim();
+    if (!token) missing.push("config.yaml 的 telegram.botToken 为空");
+    else if (token !== expected.token) missing.push("config.yaml 的 telegram.botToken 与所填值不一致");
+
+    // allowedUsers: every entered ID must be present in the written list.
+    const allowed = cfg.telegram?.allowedUsers;
+    const writtenNums = Array.isArray(allowed) ? allowed.map((u: unknown) => Number(u)) : [];
+    const enteredNums = expected.users.split(",").map((s) => s.trim()).filter(Boolean).map(Number);
+    const usersOk = enteredNums.length > 0 && enteredNums.every((n) => writtenNums.includes(n));
+    if (!usersOk) missing.push("config.yaml 的 telegram.allowedUsers 未包含所填用户 ID");
+
     const rootsOk = Array.isArray(cfg.devRoots) && cfg.devRoots.some((r: unknown) => String(r) === expected.devRoot);
     if (!rootsOk) missing.push("config.yaml 的 devRoots 未包含所填开发根目录");
     const key = String(cfg.admin?.apiKey ?? "").trim();
@@ -351,8 +371,8 @@ function verifyWritten(expected: { token: string; users: string; devRoot: string
   if (missing.length > 0) {
     throw new Error(
       `配置写入校验失败！写入后重读发现以下问题:\n  - ${missing.join("\n  - ")}\n` +
-        `已写入的目标路径:\n  .env        = ${ENV_PATH}\n  config.yaml = ${CONFIG_PATH}\n` +
-        `请检查该路径的写入权限或磁盘空间，或手动编辑上述文件后再启动。`,
+        `已写入的目标路径:\n  config.yaml = ${CONFIG_PATH}\n  .env        = ${ENV_PATH}\n` +
+        `请检查该路径的写入权限或磁盘空间，或手动编辑 config.yaml 后再启动。`,
     );
   }
 }
@@ -388,14 +408,19 @@ async function main(): Promise<void> {
     validate: validateDevRoot,
   });
 
-  // ── .env: token + allowed users ──────────────────────────────────────────
-  let envText = existsSync(ENV_PATH) ? readFileSync(ENV_PATH, "utf8") : "";
-  envText = setEnvKey(envText, "TELEGRAM_BOT_TOKEN", token);
-  envText = setEnvKey(envText, "TELEGRAM_ALLOWED_USERS", users);
-  writeFileSync(ENV_PATH, envText, "utf8");
-
-  // ── config.yaml: devRoots + admin apiKey (comments preserved) ─────────────
+  // ── config.yaml: telegram credentials + devRoots + admin apiKey ──────────
+  // Token & allowed users are written into config.yaml (replacing the template
+  // placeholders), NOT .env. The bot reads telegram.botToken / allowedUsers
+  // from here, so this — not an .env line — is what makes a fresh install start.
   const doc = parseDocument(readFileSync(CONFIG_PATH, "utf8"));
+  doc.setIn(["telegram", "botToken"], token);
+  const usersArray = users
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => Number(s))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  doc.setIn(["telegram", "allowedUsers"], usersArray);
   doc.setIn(["devRoots"], [devRoot]);
 
   // Auto-generate a random admin API key only when none is set, so the built-in
@@ -416,6 +441,15 @@ async function main(): Promise<void> {
     doc.setIn(["admin", "port"], adminPort);
   }
   writeFileSync(CONFIG_PATH, doc.toString(), "utf8");
+
+  // ── .env: drop any legacy token/users lines so config.yaml is the single
+  //    source of truth. (COBOT_PROXY, if set, stays in .env — handled below.) ─
+  if (existsSync(ENV_PATH)) {
+    let envText = readFileSync(ENV_PATH, "utf8");
+    envText = removeEnvKey(envText, "TELEGRAM_BOT_TOKEN");
+    envText = removeEnvKey(envText, "TELEGRAM_ALLOWED_USERS");
+    writeFileSync(ENV_PATH, envText, "utf8");
+  }
 
   // ── proxy: only ask if a proxy isn't already configured AND the direct path
   //    to Telegram is actually blocked. Reachable networks skip this entirely.

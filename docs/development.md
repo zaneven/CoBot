@@ -84,8 +84,8 @@ Env vars (most are optional; defaults shown):
 | `COBOT_PROXY` | — | Explicit proxy URL (bypasses macOS auto-detect) |
 | `LOG_LEVEL` | `info` | pino level: `trace` / `debug` / `info` / `warn` / `error` |
 | `NO_PRETTY` | — | Set to truthy to emit JSON logs instead of pino-pretty |
-| `TELEGRAM_BOT_TOKEN` | — | Bot token fallback when `telegram.botToken` is unset in yaml |
-| `TELEGRAM_ALLOWED_USERS` | — | Allowed-user-IDs fallback (comma-separated) when `telegram.allowedUsers` is unset |
+| `TELEGRAM_BOT_TOKEN` | — | Overrides `telegram.botToken` (yaml is the default home; `setup` writes it there) |
+| `TELEGRAM_ALLOWED_USERS` | — | Overrides `telegram.allowedUsers` (comma-separated; yaml is the default home) |
 
 ### Approval (env overrides yaml `approval:`)
 

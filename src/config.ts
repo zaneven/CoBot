@@ -195,14 +195,23 @@ export function clampTurns(v: number | undefined): number | undefined {
 export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): Config {
   const yaml = loadYaml(configPath);
 
-  const token = yaml.telegram?.botToken ?? process.env.TELEGRAM_BOT_TOKEN ?? "";
+  // Env wins (documented contract); fall back to the YAML value, then "".
+  // `??` would let an empty `botToken: ""` from the template shadow a real env
+  // var — `||` treats that empty string as unset so the env var (or the value
+  // setup wrote into config.yaml) is actually used.
+  const token = (process.env.TELEGRAM_BOT_TOKEN ?? "").trim() || (yaml.telegram?.botToken ?? "").trim() || "";
   if (!token) {
     logger.warn("TELEGRAM_BOT_TOKEN / telegram.botToken not set; bot will not start until configured");
   }
 
-  const allowedUsersRaw = yaml.telegram?.allowedUsers !== undefined
+  // Env wins; fall back to the YAML list (mirrors the token logic above). An
+  // empty/absent env var uses what setup wrote into config.yaml; an env var,
+  // when set, overrides it.
+  const envAllowedUsers = (process.env.TELEGRAM_ALLOWED_USERS ?? "").trim();
+  const yamlAllowedUsers = yaml.telegram?.allowedUsers !== undefined
     ? (Array.isArray(yaml.telegram.allowedUsers) ? yaml.telegram.allowedUsers.join(",") : String(yaml.telegram.allowedUsers))
-    : (process.env.TELEGRAM_ALLOWED_USERS ?? "");
+    : "";
+  const allowedUsersRaw = envAllowedUsers || yamlAllowedUsers;
   const allowedUsers = new Set(
     allowedUsersRaw
       .split(",")

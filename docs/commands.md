@@ -58,8 +58,8 @@ labels like `项目` / `会话` / `新建` also work).
 
 ## Safety
 
-- Only users listed in `telegram.allowedUsers` (or `TELEGRAM_ALLOWED_USERS`) can
-  control the bot.
+- Only users listed in `telegram.allowedUsers` (in `config.yaml`; env
+  `TELEGRAM_ALLOWED_USERS` overrides) can control the bot.
 - `/bind` only accepts paths whitelisted in `config.yaml` (`projects` or
   `devRoots`).
 - In `auto` mode every tool call is approved automatically. In `interactive`

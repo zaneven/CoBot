@@ -111,16 +111,13 @@ npm install
 npm rebuild better-sqlite3   # 仅当 Node 版本变更时需要
 ```
 
-再手动填写 `.env`：
-
-```bash
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGhi...
-TELEGRAM_ALLOWED_USERS=100123456       # 你的 Telegram 用户 ID（逗号分隔）
-```
-
-和 `config.yaml` 的开发根目录与管理密钥：
+再手动填写 `config.yaml`（Bot Token 与用户 ID 写在这里，不写 `.env`——`setup` 即写入此处）：
 
 ```yaml
+telegram:
+  botToken: "123456789:ABCdefGhi..."   # 从 @BotFather 获取
+  allowedUsers: [100123456]            # 你的 Telegram 用户 ID（逗号分隔）
+
 devRoots:
   - /Users/YOU/Develop          # 其直接子目录即为可切换的项目
 
@@ -252,8 +249,9 @@ CLAUDE_ALLOW_DANGEROUS_SKIP_PERMISSIONS=false   # 危险开关，默认关
 CLAUDE_MAX_TURNS=                     # 单任务轮次上限（默认 50）
 
 # ---- CoBot ----
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_ALLOWED_USERS=
+# Telegram Bot Token 与用户 ID 写在 config.yaml（telegram.botToken /
+# telegram.allowedUsers）——`setup` 即写入此处。环境变量仍可覆盖 YAML，
+# 但 setup 不再把它们写入 .env。
 COBOT_DB_PATH=./data/cobot.db
 COBOT_PROXY=http://127.0.0.1:10808    # 访问 Telegram 的出站代理（可选）
 LOG_LEVEL=info                          # trace | debug | info | warn | error
@@ -274,7 +272,7 @@ projects:                       # devRoots 之外额外白名单路径
   # - /Users/YOU/.hermes
 
 telegram:
-  botToken: ""                  # 或写 .env
+  botToken: ""                  # 从 @BotFather 获取（环境变量可覆盖）
   allowedUsers: [12345678]
   maxEditChars: 3500           # 触发新消息追加的字符阈值
   pollTimeout: 30              # 长轮询超时（秒）
@@ -305,7 +303,7 @@ admin:
 
 CoBot 是一个拥有**本地代码执行能力**的无值守 Agent，因此自带护栏，让自动化使用**可控且可观测**。
 
-- **用户白名单** —— `TELEGRAM_ALLOWED_USERS` 管控访问，未授权用户直接忽略。
+- **用户白名单** —— `config.yaml` 的 `telegram.allowedUsers` 管控访问（环境变量 `TELEGRAM_ALLOWED_USERS` 可覆盖），未授权用户直接忽略。
 - **路径白名单** —— `/bind` 只接受 `config.yaml` 中 `devRoots` / `projects` 下的路径。
 - **单任务轮次上限** —— `DEFAULT_MAX_TURNS = 50`（用 `CLAUDE_MAX_TURNS` 或 `defaults.maxTurns` 覆盖；`0` = 无限）。
 - **单 Chat 每日配额** —— `dailyCostCapUsd` / `dailyTokenCap` 超限即拒新任务；本地午夜重置。

@@ -115,16 +115,13 @@ npm install
 npm rebuild better-sqlite3   # only if your Node version changed
 ```
 
-Then fill in `.env`:
-
-```bash
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGhi...
-TELEGRAM_ALLOWED_USERS=100123456       # your Telegram user ID (comma-separated)
-```
-
-and the dev root + admin key in `config.yaml`:
+Then fill in `config.yaml` (the bot token & allowed users live here, not `.env` — `setup` writes them here):
 
 ```yaml
+telegram:
+  botToken: "123456789:ABCdefGhi..."   # from @BotFather
+  allowedUsers: [100123456]            # your Telegram user ID (comma-separated)
+
 devRoots:
   - /Users/YOU/Develop          # immediate subdirectories become switchable projects
 
@@ -256,8 +253,9 @@ CLAUDE_ALLOW_DANGEROUS_SKIP_PERMISSIONS=false   # DANGEROUS
 CLAUDE_MAX_TURNS=                     # cap agentic turns per task (default 50)
 
 # ---- CoBot ----
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_ALLOWED_USERS=
+# Telegram bot token & allowed users live in config.yaml (telegram.botToken /
+# telegram.allowedUsers) — that's where `setup` writes them. These env vars
+# still override the YAML if set, but setup no longer touches .env for them.
 COBOT_DB_PATH=./data/cobot.db
 COBOT_PROXY=http://127.0.0.1:10808    # outbound proxy to reach Telegram (optional)
 LOG_LEVEL=info                          # trace | debug | info | warn | error
@@ -278,7 +276,7 @@ projects:                       # extra whitelisted paths outside devRoots
   # - /Users/YOU/.hermes
 
 telegram:
-  botToken: ""                  # or set via .env
+  botToken: ""                  # from @BotFather (env overrides)
   allowedUsers: [12345678]
   maxEditChars: 3500           # chars before appending a new chunk message
   pollTimeout: 30              # long-poll timeout (s)
@@ -309,7 +307,7 @@ admin:
 
 CoBot is a headless agent with **local code-execution power**, so it ships guardrails to keep autonomous use **controllable and observable**.
 
-- **User allowlist** — `TELEGRAM_ALLOWED_USERS` gates access; unauthorized users are ignored.
+- **User allowlist** — `telegram.allowedUsers` in `config.yaml` gates access (env `TELEGRAM_ALLOWED_USERS` overrides); unauthorized users are ignored.
 - **Path whitelist** — `/bind` only accepts paths under `devRoots` / `projects` in `config.yaml`.
 - **Per-task turn cap** — `DEFAULT_MAX_TURNS = 50` (override via `CLAUDE_MAX_TURNS` or `defaults.maxTurns`; `0` = unlimited).
 - **Per-chat daily quota** — `dailyCostCapUsd` / `dailyTokenCap` reject new tasks once exceeded; resets at local midnight.
