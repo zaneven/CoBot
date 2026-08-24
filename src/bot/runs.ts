@@ -2,12 +2,13 @@ import type { Api } from "grammy";
 import { type Config, DEFAULT_APPROVAL_SKIP_TOOLS } from "../config.js";
 import type { Store, AuditLog } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
-import type { PromptInput, PermissionRequest, PermissionDecision } from "../claude/types.js";
+import type { PromptInput, PermissionRequest, PermissionDecision, UserDialogRequest, UserDialogResult } from "../claude/types.js";
 import { runClaude } from "../claude/driver.js";
 import { SilenceIndicator } from "./indicator.js";
 import { sendRichText } from "../util/send.js";
 import { logger } from "../util/logger.js";
 import { approvalManager } from "./approval.js";
+import { dialogManager } from "./dialog.js";
 import { TaskDashboard } from "./dashboard.js";
 import { TelegramStreamer } from "./streaming.js";
 import { buildNextActions, renderSuggestionKeyboard, extractNextActions, NEXT_ACTIONS_DIRECTIVE } from "./nextActions.js";
@@ -111,6 +112,20 @@ async function runTurn(opts: {
           skipTools: new Set(approvalCfg.skipTools),
           timeoutMs: approvalCfg.timeoutMs,
           timeoutAction: approvalCfg.timeoutAction,
+        }, sig)
+    : undefined;
+
+  // AskUserQuestion relay: surface the model's question as a Telegram inline
+  // keyboard so the user can tap an option (or send freeform text via "其他").
+  // Only for interactive tasks — cron runs leave it unset so AskUserQuestion
+  // degrades to the SDK's no-dialog default, safe for unattended headless.
+  const userDialogHandler = origin !== "cron"
+    ? (req: UserDialogRequest, sig: AbortSignal): Promise<UserDialogResult> =>
+        dialogManager.ask(req, {
+          api,
+          chatId,
+          indicator,
+          timeoutMs: approvalCfg?.timeoutMs ?? 300000,
         }, sig)
     : undefined;
 
@@ -237,6 +252,7 @@ async function runTurn(opts: {
         signal: abortSignal,
         timeoutMs: config.claude.taskTimeoutMs,
         canUseToolHandler,
+        userDialogHandler,
       })) {
         switch (ev.kind) {
           case "init":
@@ -481,6 +497,9 @@ async function runTurn(opts: {
     // Safety net: deny any approval prompt still open for this chat (e.g. the
     // task aborted while waiting on a tap).
     approvalManager.cancelForChat(chatId, api);
+    // Safety net: cancel any AskUserQuestion still open for this chat (e.g.
+    // the task aborted while waiting on a tap) so the worker isn't left parked.
+    dialogManager.cancelForChat(chatId, api);
     // Finalize the live "执行过程" message. No-op when the feature is off, and
     // idempotent when the success branch already finalized it (the finalize()
     // guard returns early). For a terminal error/abort/turns-exhausted it pins

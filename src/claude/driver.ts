@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { query, type Options, type SDKMessage, type SDKUserMessage, type ModelUsage, type PermissionResult, type PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options, type SDKMessage, type SDKUserMessage, type ModelUsage, type PermissionResult, type PermissionUpdate, type UserDialogResult as SdkUserDialogResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ContentBlockParam } from "@anthropic-ai/sdk/resources";
-import type { DriverEvent, RunParams, PromptInput, MediaAttachment, PermissionRequest, PermissionDecision } from "./types.js";
+import type { DriverEvent, RunParams, PromptInput, MediaAttachment, PermissionRequest, PermissionDecision, UserDialogRequest, UserDialogResult } from "./types.js";
 import { logger } from "../util/logger.js";
 
 /**
@@ -70,6 +70,24 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
         return { behavior: "allow" as const };
       };
     }
+  }
+
+  // User dialogs (e.g. AskUserQuestion): the model can ask the user a question
+  // via the `request_user_dialog` control flow. The CLI only emits a dialog
+  // kind declared in `supportedDialogKinds` AND only forwards it when
+  // `onUserDialog` is set — omitting EITHER means the dialog is silently
+  // auto-cancelled (the model gets no answer and proceeds with its default),
+  // which was the "bot never asked the question, no options shown" bug. Wire
+  // both together only when a handler is provided. For headless runs (cron,
+  // no handler) leave unset so the SDK applies the dialog's default behavior.
+  if (params.userDialogHandler) {
+    const handler = params.userDialogHandler;
+    options.supportedDialogKinds = ["ask_user_question"];
+    options.onUserDialog = async (request, opts) => {
+      const req = buildUserDialogRequest(request, opts.requestId);
+      const res = await handler(req, opts.signal);
+      return toSdkUserDialogResult(res);
+    };
   }
 
   // Concatenation of every text delta we've already yielded (both the live
@@ -366,6 +384,24 @@ export function toSdkPermissionResult(dec: PermissionDecision): PermissionResult
     return { behavior: "allow", updatedPermissions: dec.updatedPermissions as PermissionUpdate[] | undefined };
   }
   return { behavior: "deny", message: dec.message };
+}
+
+/** Build a bot-layer {@link UserDialogRequest} from the SDK's onUserDialog args.
+ *  Takes the request structurally (not by SDK type name) so the bot layer stays
+ *  the only place that names SDK types — the driver is still the SDK boundary. */
+export function buildUserDialogRequest(
+  req: { dialogKind: string; payload: Record<string, unknown>; toolUseID?: string },
+  requestId: string,
+): UserDialogRequest {
+  return { requestId, dialogKind: req.dialogKind, payload: req.payload, toolUseID: req.toolUseID };
+}
+
+/** Map a bot-layer {@link UserDialogResult} to the SDK's UserDialogResult. Never
+ *  returns null: the bot layer always settles (completed/cancelled) so the dialog
+ *  is never parked on the SDK's fail-closed path (which would hang the worker). */
+export function toSdkUserDialogResult(res: UserDialogResult): SdkUserDialogResult {
+  if (res.behavior === "completed") return { behavior: "completed", result: res.result };
+  return { behavior: "cancelled" };
 }
 
 async function* toUserMessages(input: PromptInput): AsyncGenerator<SDKUserMessage> {

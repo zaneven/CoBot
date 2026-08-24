@@ -64,6 +64,30 @@ export type PermissionDecision =
   | { behavior: "allow"; updatedPermissions?: unknown }
   | { behavior: "deny"; message: string };
 
+/**
+ * A user-dialog request forwarded from the SDK's `onUserDialog` callback (e.g.
+ * an AskUserQuestion the model invoked mid-run). The driver builds this from
+ * the SDK args so the bot layer never touches SDK types. Unknown `dialogKind`s
+ * must be answered with `{ behavior: "cancelled" }` (per the SDK contract).
+ */
+export interface UserDialogRequest {
+  /** SDK control_request id — idempotency key (the SDK may redeliver it). */
+  requestId: string;
+  dialogKind: string;
+  payload: Record<string, unknown>;
+  toolUseID?: string;
+}
+
+/**
+ * A bot-layer answer returned to the driver for mapping to the SDK's
+ * UserDialogResult. Never null: always settle (completed/cancelled) so the
+ * dialog is never left parked — the SDK's fail-closed path would otherwise
+ * hang the worker until its park deadline.
+ */
+export type UserDialogResult =
+  | { behavior: "completed"; result: unknown }
+  | { behavior: "cancelled" };
+
 export interface RunParams {
   prompt: PromptInput;
   cwd: string;
@@ -85,4 +109,11 @@ export interface RunParams {
   /** Interactive tool-approval handler. When set, `canUseTool` delegates to it
    *  instead of auto-approving. Omit to keep headless auto-approve behavior. */
   canUseToolHandler?: (req: PermissionRequest, signal: AbortSignal) => Promise<PermissionDecision>;
+  /** Interactive user-dialog handler (e.g. AskUserQuestion). When set, the
+   *  driver declares `ask_user_question` support and forwards dialogs here
+   *  instead of letting the SDK silently auto-cancel them (which was the
+   *  "bot never asked the question, no options shown" bug). Omit for headless
+   *  runs where there's nobody to answer — the SDK applies the dialog's
+   *  default behavior, safe for unattended cron. */
+  userDialogHandler?: (req: UserDialogRequest, signal: AbortSignal) => Promise<UserDialogResult>;
 }

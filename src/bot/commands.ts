@@ -8,6 +8,7 @@ import type { Registry } from "../registry/registry.js";
 import type { CronManager } from "../scheduler/cron.js";
 import { listProjectSessions, listAllSessions, findSession } from "../claude/sessions.js";
 import { submitInteractive } from "./runs.js";
+import { dialogManager } from "./dialog.js";
 import { runBotCtl, tailBotLog, type BotCtlAction } from "./ctl.js";
 import { getSuggestion } from "./nextActions.js";
 import { logger } from "../util/logger.js";
@@ -428,6 +429,10 @@ export async function handleText(ctx: Context, config: Config, store: Store, reg
   const chatId = ctx.chat?.id;
   const text = ctx.message?.text;
   if (!chatId || !text) return;
+
+  // AskUserQuestion freeform ("Other") reply: if a dialog is armed for this
+  // chat, the next plain-text message becomes the answer instead of a prompt.
+  if (await dialogManager.handleTextReply(chatId, text, ctx.api)) return;
 
   // Pending "new project" name → intercept before Claude Code.
   if (pendingNewProject.has(chatId)) {

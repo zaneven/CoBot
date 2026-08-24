@@ -6,6 +6,7 @@ import type { Registry } from "../registry/registry.js";
 import { CronManager } from "../scheduler/cron.js";
 import { logger } from "../util/logger.js";
 import { approvalManager } from "./approval.js";
+import { dialogManager } from "./dialog.js";
 import {
   handleStart,
   handleHelp,
@@ -100,6 +101,9 @@ export function createBot(
 
   // Inline-button approval decisions (appr:<shortId>:<action>).
   bot.callbackQuery(/^appr:/, (ctx) => approvalManager.handleCallback(ctx));
+
+  // Inline-button AskUserQuestion option/action taps (ask:<shortId>:…).
+  bot.callbackQuery(/^ask:/, (ctx) => dialogManager.handleCallback(ctx));
 
   // /approve mode toggle (approve:<auto|interactive>) — distinct prefix from
   // the tool-approval `appr:` above so the two never collide.
