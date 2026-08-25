@@ -76,7 +76,7 @@ async function main(): Promise<void> {
   }
   const me = await bot.api.getMe();
   logger.info(
-    { username: me.username, hermes: config.hermes.enabled, taskTimeoutMs: config.claude.taskTimeoutMs },
+    { username: me.username, hermes: config.hermes.enabled, permissionMode: config.claude.permissionMode, allowDangerousSkip: config.claude.allowDangerousSkip, taskTimeoutMs: config.claude.taskTimeoutMs },
     "CoBot bot started",
   );
 

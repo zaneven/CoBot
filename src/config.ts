@@ -43,7 +43,14 @@ export interface Config {
   allowedUsers: Set<number>;
   claude: {
     model?: string;
-    permissionMode: "default" | "acceptEdits" | "plan" | "bypassPermissions" | "dontAsk" | "auto";
+    /** SDK permission mode. Only the two headless-compatible values are
+     *  supported: 'acceptEdits' (auto-accept edits + canUseTool auto-approves
+     *  other tools) and 'bypassPermissions' (skip all checks, needs
+     *  allowDangerouslySkip). The interactive SDK modes 'default'/'plan'/
+     *  'dontAsk' need a TTY the bot can't provide and silently deny writes, so
+     *  they're intentionally excluded — the loader coerces any other value to
+     *  'acceptEdits' with a loud error (see loadConfig). */
+    permissionMode: "acceptEdits" | "bypassPermissions";
     allowedTools?: string[];
     allowDangerousSkip: boolean;
     /** Hard per-task wall-clock timeout in ms (prevents a hung task from blocking the chat). */
@@ -221,14 +228,33 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
       .filter((n) => Number.isFinite(n)),
   );
 
-  // Default to acceptEdits: headless (no human at a terminal) must auto-accept
-  // file edits, otherwise any edit-write task hangs on a permission prompt nobody
-  // can answer. Use /dev tools needing bash writes can still set bypassPermissions.
-  const permissionMode = (process.env.CLAUDE_PERMISSION_MODE ?? "acceptEdits") as Config["claude"]["permissionMode"];
+  // Headless (no human at a terminal) can only run a mode that never needs an
+  // interactive prompt: 'acceptEdits' (auto-accept file edits; the driver's
+  // canUseTool callback auto-approves every other tool) or 'bypassPermissions'
+  // (skip all checks, needs allowDangerouslySkip). The SDK's 'default'/'plan'/
+  // 'dontAsk' modes need a TTY the bot can't provide — a write task then
+  // silently fails (claude auto-denies with no prompt message). Those are NOT
+  // supported: any other value (incl. typos / future SDK modes) is rejected
+  // and coerced to 'acceptEdits' so the bot keeps working, with a loud error.
+  const SUPPORTED_PERMISSION_MODES = ["acceptEdits", "bypassPermissions"] as const;
+  const permissionModeRaw = process.env.CLAUDE_PERMISSION_MODE ?? "acceptEdits";
+  const permissionModeSupported = (SUPPORTED_PERMISSION_MODES as readonly string[]).includes(permissionModeRaw);
+  if (!permissionModeSupported) {
+    logger.error(
+      { requested: permissionModeRaw, coercedTo: "acceptEdits", fix: "set CLAUDE_PERMISSION_MODE=acceptEdits (auto-accept edits + auto-approve other tools) or =bypassPermissions (with CLAUDE_ALLOW_DANGEROUS_SKIP_PERMISSIONS=true) in .env" },
+      `CLAUDE_PERMISSION_MODE='${permissionModeRaw}' is unsupported for headless operation (default/plan/dontAsk need an interactive TTY, so writes get auto-denied) — coerced to 'acceptEdits' so the bot keeps working`,
+    );
+  }
+  const permissionMode = (permissionModeSupported ? permissionModeRaw : "acceptEdits") as Config["claude"]["permissionMode"];
   const allowDangerousSkip = (process.env.CLAUDE_ALLOW_DANGEROUS_SKIP_PERMISSIONS ?? "false") === "true";
 
-  if (allowDangerousSkip) {
-    logger.warn("CLAUDE_ALLOW_DANGEROUS_SKIP_PERMISSIONS=true — spawned sessions will bypass ALL permission checks");
+  if (allowDangerousSkip && permissionMode === "bypassPermissions") {
+    logger.warn("CLAUDE_ALLOW_DANGEROUS_SKIP_PERMISSIONS=true + bypassPermissions — spawned sessions skip ALL permission checks");
+  } else if (allowDangerousSkip) {
+    // The flag only takes effect under bypassPermissions; elsewhere it's inert.
+    // Surprising for a user who set it expecting permissiveness but still hits
+    // denials — exactly the unsupported-mode footgun above.
+    logger.warn({ permissionMode }, "CLAUDE_ALLOW_DANGEROUS_SKIP_PERMISSIONS=true is inert here — it only takes effect under CLAUDE_PERMISSION_MODE=bypassPermissions");
   }
 
   const apiKey = process.env.HERMES_API_KEY;
