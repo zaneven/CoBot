@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # CoBot Control Script
-# Usage: ./scripts/cobot.sh [install|start|stop|restart|status|uninstall] [--yes]
+# Usage: ./scripts/cobot.sh [install|start|stop|restart|status|update|uninstall] [--yes]
 #
 
 set -e
@@ -181,6 +181,7 @@ cmd_install() {
   echo "   cobot stop      - Stop CoBot service"
   echo "   cobot restart   - Restart CoBot service"
   echo "   cobot status    - View CoBot status & logs"
+  echo "   cobot update    - Pull latest source & restart"
   echo "   cobot uninstall - Remove CoBot (CLI + deps + data + config)"
   echo "=========================================="
 
@@ -328,6 +329,110 @@ cmd_status() {
   fi
 }
 
+cmd_update() {
+  echo "=========================================="
+  echo " Updating CoBot"
+  echo "=========================================="
+
+  # 'update' pulls the latest source from the remote, refreshes deps, and
+  # restarts. Only works on a git clone of the source repo (a tarball/zip
+  # install can't self-update). All safety checks run while the bot is still
+  # up; the bot is only stopped once a clean fast-forward is guaranteed, so a
+  # failed/aborted update never strands the running instance.
+  if ! git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "[!] ${ROOT_DIR} is not a git repository — 'update' needs a git clone of the source."
+    return 1
+  fi
+
+  export_proxy_env
+
+  local branch upstream
+  branch=$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+  if [ -z "${branch}" ] || [ "${branch}" = "HEAD" ]; then
+    echo "[!] Detached HEAD — checkout a branch to track updates (e.g. git -C ${ROOT_DIR} checkout main)."
+    return 1
+  fi
+  upstream=$(git -C "${ROOT_DIR}" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo "")
+  if [ -z "${upstream}" ]; then
+    echo "[!] Branch '${branch}' has no upstream configured."
+    echo "    Set it with: git -C ${ROOT_DIR} branch --set-upstream-to=origin/${branch}"
+    return 1
+  fi
+
+  echo "[+] Fetching ${upstream}..."
+  if ! git -C "${ROOT_DIR}" fetch --quiet origin 2>/dev/null; then
+    echo "[!] git fetch failed — check network/proxy reachability to the remote."
+    return 1
+  fi
+
+  # behind = remote commits not yet on local (what we'd pull in).
+  # ahead   = local commits not on remote (divergence — blocks a fast-forward).
+  local behind ahead
+  behind=$(git -C "${ROOT_DIR}" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
+  ahead=$(git -C "${ROOT_DIR}" rev-list --count '@{upstream}..HEAD' 2>/dev/null || echo 0)
+
+  if [ "${behind}" = "0" ]; then
+    if [ "${ahead}" = "0" ]; then
+      echo "[✓] Already up to date."
+    else
+      echo "[✓] Already up to date (${ahead} local commit(s) ahead of ${upstream} — not pushed)."
+    fi
+    # Nothing to pull — don't touch the running bot.
+    return 0
+  fi
+
+  if [ "${ahead}" != "0" ]; then
+    echo "[!] Local branch has ${ahead} commit(s) not on ${upstream} — cannot fast-forward."
+    echo "    Rebase or merge manually, then re-run 'cobot update'."
+    return 1
+  fi
+
+  # A dirty working tree would clash with the pull. config.yaml/.env are
+  # gitignored so they never show here; only tracked source edits do. Abort
+  # with the files listed so the user commits/stashes knowingly — auto-stashing
+  # risks losing work.
+  local dirty
+  dirty=$(git -C "${ROOT_DIR}" status --porcelain 2>/dev/null | grep -vE '^\?\?' || true)
+  if [ -n "${dirty}" ]; then
+    echo "[!] Uncommitted local changes would conflict with the update:"
+    echo "${dirty}" | sed 's/^/    /'
+    echo "    Commit or stash them (git -C ${ROOT_DIR} stash), then re-run 'cobot update'."
+    return 1
+  fi
+
+  # Pre-checks passed (clean tree, fast-forwardable) — safe to stop now.
+  echo "[+] ${behind} new commit(s) behind ${upstream}. Stopping CoBot to update safely..."
+  cmd_stop >/dev/null 2>&1 || true
+
+  # --ff-only: never create a merge commit; if the pre-checks somehow missed a
+  # divergence (e.g. a push race), fail loudly instead of silently merging. The
+  # fetch above already refreshed origin/<branch>, so merge against @{upstream}
+  # with no second network round-trip.
+  if ! git -C "${ROOT_DIR}" merge --ff-only --quiet '@{upstream}' 2>/dev/null; then
+    echo "[!] Fast-forward failed (likely a divergence race). CoBot is stopped."
+    echo "    Resolve in ${ROOT_DIR}, then run 'cobot start'."
+    return 1
+  fi
+
+  echo "[+] Updating dependencies..."
+  if ! npm install --no-fund --no-audit --loglevel=error; then
+    echo "[!] npm install failed — CoBot is stopped. Fix deps in ${ROOT_DIR}, then run 'cobot start'."
+    return 1
+  fi
+
+  # Typecheck the freshly-pulled source so a broken upstream is caught before
+  # restart rather than crashing at runtime. Non-fatal: a type error shouldn't
+  # strand the bot — we still start, just warn and point at the details.
+  echo "[+] Typechecking updated source..."
+  if ! npm run typecheck --silent >/dev/null 2>&1; then
+    echo "[!] Typecheck failed after update — the bot will still start, but the source may have issues."
+    echo "    Run 'npm run typecheck' in ${ROOT_DIR} for details."
+  fi
+
+  echo "[+] Restarting CoBot..."
+  cmd_start
+}
+
 cmd_uninstall() {
   local confirm="${1:-}"
 
@@ -413,13 +518,16 @@ case "${1:-}" in
   status)
     cmd_status
     ;;
+  update)
+    cmd_update
+    ;;
   uninstall)
     cmd_uninstall "${2:-}"
     ;;
   *)
     echo "CoBot Management Script"
     echo ""
-    echo "Usage: $0 {install|start|stop|restart|status|uninstall} [--yes]"
+    echo "Usage: $0 {install|start|stop|restart|status|update|uninstall} [--yes]"
     echo ""
     echo "Commands:"
     echo "  install   - Install deps, create config, interactive setup, link CLI, then start."
@@ -427,6 +535,7 @@ case "${1:-}" in
     echo "  stop      - Gracefully stop CoBot process and clear SQLite task locks."
     echo "  restart   - Restart CoBot service."
     echo "  status    - Check running status and recent logs."
+    echo "  update    - Pull latest source from the remote, refresh deps, and restart."
     echo "  uninstall - Stop CoBot, remove global CLI, delete deps/data/config. (--yes skips prompt)"
     exit 1
     ;;
