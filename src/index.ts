@@ -32,7 +32,7 @@ async function main(): Promise<void> {
   const store = new Store(config.dbPath);
   approvalManager.init(store);
   const swept = store.sweepStaleRunning();
-  if (swept) logger.warn({ swept }, "marked stale 'running' tasks as aborted (leftover from a crashed run)");
+  if (swept.length) logger.warn({ swept: swept.length }, "marked stale 'running' tasks as aborted (leftover from a crashed run)");
   const registry = new Registry(store, { mediaDir: join(dirname(config.dbPath), "media") });
   const recovered = store.listAllQueued().length;
   if (recovered) logger.warn({ recovered }, "recovered queued tasks from a previous run (will run as the chat drains)");
@@ -104,6 +104,32 @@ async function main(): Promise<void> {
       logger.info({ chatId: Number(notifyCid) }, "sent restart-success notification");
     } catch (err) {
       logger.warn({ err: String(err) }, "failed to send restart-success notification");
+    }
+  }
+
+  // Notify chats whose task was left 'running' when the previous process died
+  // (watchdog / OOM / crash). The dead process never ran its dashboard
+  // finalize, so without this the user sees a frozen "任务进行中" card and no
+  // message — and assumes the task hung. Runs after the Telegram handshake so
+  // sends are only attempted once the bot can actually reach Telegram. Each
+  // send is isolated: one failing chatId must not block the others or startup.
+  // (An intentional /restart is unaffected — cobot.sh's cmd_stop pre-sweeps
+  // via sqlite3, so `swept` is empty then; this only fires on an ungraceful
+  // exit that skipped cmd_stop.)
+  for (const t of swept) {
+    try {
+      const preview = (t.prompt || "").replace(/\s+/g, " ").trim().slice(0, 80);
+      const lines = [
+        "⚠️ 任务因进程异常终止而中断",
+        "",
+        "CoBot 进程在上次执行期间意外终止（可能由看门狗 / OOM / 重启触发），该任务未能正常结束，已自动标记为中断。重新发送你的请求即可继续。",
+      ];
+      if (t.projectPath) lines.push("", `📁 ${t.projectPath}`);
+      if (preview) lines.push(`📝 ${preview}`);
+      await bot.api.sendMessage(t.chatId, lines.join("\n"));
+      logger.info({ chatId: t.chatId, taskId: t.id }, "sent stale-task interrupt notification");
+    } catch (err) {
+      logger.warn({ chatId: t.chatId, taskId: t.id, err: String(err) }, "failed to send stale-task interrupt notification");
     }
   }
 

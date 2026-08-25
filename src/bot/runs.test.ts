@@ -2,9 +2,9 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../store/db.js";
 import { Registry } from "../registry/registry.js";
-import { submitInteractive, shouldSendFinalAnswer, buildTraceReply, isRetryableError, isCorruptedResumeError } from "./runs.js";
+import { submitInteractive, runTurn, shouldSendFinalAnswer, buildTraceReply, isRetryableError, isCorruptedResumeError } from "./runs.js";
 import type { Config } from "../config.js";
-import type { PromptInput } from "../claude/types.js";
+import type { PromptInput, DriverEvent } from "../claude/types.js";
 
 // Stub API that records sendMessage calls.
 class StubApi {
@@ -13,6 +13,11 @@ class StubApi {
     this.messages.push(text);
     return { message_id: 1 };
   };
+  // dashboard.finalize tries editMessageText first; throwing here forces the
+  // sendMessage fallback so the test can capture the settlement card text.
+  editMessageText = async (): Promise<void> => { throw new Error("edit not supported in stub"); };
+  deleteMessage = async (): Promise<void> => { /* no-op */ };
+  sendChatAction = async (): Promise<void> => { /* no-op */ };
 }
 
 const MINIMAL_CONFIG = {
@@ -187,4 +192,60 @@ test("buildTraceReply: normalizes existing list markers instead of double-bullet
 test("buildTraceReply: drops the trailing block that duplicates the summary and filters blanks", () => {
   const out = buildTraceReply(["step one", "   ", "final summary"], "final summary");
   assert.equal(out, "**执行过程**\n\n- step one\n\n---\n\nfinal summary");
+});
+
+// ── runTurn: aborted/timeout must notify (regression) ────────────────────────
+
+// Before the fix, a `done{aborted}` only set flags; the `attemptAborted` guard
+// then broke out of the retry loop BEFORE the post-loop `dashboard.finalize
+// (aborted)` ran — so a watchdog-timed-out (or /stop-aborted) task left the
+// "任务进行中" card frozen with NO settlement message. The user saw silence
+// and assumed the task had hung. These inject a fake driver so runTurn is
+// exercisable without the real SDK.
+test("runTurn: timeout (done{aborted,timeout}) sends a settlement card, not silence", async () => {
+  store.upsertBinding(CHAT, "/p", null);
+  const fakeDriver = async function* (): AsyncGenerator<DriverEvent> {
+    yield { kind: "init", sessionId: "s1", cwd: "/p", model: "m" };
+    yield { kind: "done", text: "", isError: false, aborted: true, abortedReason: "timeout" };
+  };
+  const outcome = await runTurn({
+    api: api as unknown as import("grammy").Api,
+    chatId: CHAT,
+    projectPath: "/p",
+    sessionId: null,
+    prompt: PROMPT,
+    config: MINIMAL_CONFIG,
+    registry,
+    store,
+    origin: "interactive",
+    abortSignal: new AbortController().signal,
+    runClaudeFn: fakeDriver,
+  });
+  assert.equal(outcome.status, "aborted");
+  const settled = api.messages.some((m) => m.includes("任务已中断") && m.includes("超时"));
+  assert.ok(settled, `expected a timeout settlement card, got: ${JSON.stringify(api.messages)}`);
+});
+
+test("runTurn: user abort (done{aborted,user}) settles the dashboard too", async () => {
+  store.upsertBinding(CHAT, "/p", null);
+  const fakeDriver = async function* (): AsyncGenerator<DriverEvent> {
+    yield { kind: "init", sessionId: "s2", cwd: "/p", model: "m" };
+    yield { kind: "done", text: "", isError: false, aborted: true, abortedReason: "user" };
+  };
+  const outcome = await runTurn({
+    api: api as unknown as import("grammy").Api,
+    chatId: CHAT,
+    projectPath: "/p",
+    sessionId: null,
+    prompt: PROMPT,
+    config: MINIMAL_CONFIG,
+    registry,
+    store,
+    origin: "interactive",
+    abortSignal: new AbortController().signal,
+    runClaudeFn: fakeDriver,
+  });
+  assert.equal(outcome.status, "aborted");
+  const settled = api.messages.some((m) => m.includes("任务已中断") && m.includes("用户中断"));
+  assert.ok(settled, `expected a user-abort settlement card, got: ${JSON.stringify(api.messages)}`);
 });

@@ -280,7 +280,13 @@ export class Store {
     const rows = this.db
       .prepare(`SELECT * FROM running_tasks ${where} ORDER BY started_at DESC LIMIT 20`)
       .all(...params) as Array<Record<string, unknown>>;
-    return rows.map((r) => ({
+    return rows.map((r) => this.mapRunningTask(r));
+  }
+
+  /** Map a raw running_tasks row to a {@link RunningTask}. Shared by
+   *  listTasksByProject and sweepStaleRunning. */
+  private mapRunningTask(r: Record<string, unknown>): RunningTask {
+    return {
       id: r.id as string,
       chatId: r.chat_id as number,
       projectPath: r.project_path as string,
@@ -289,7 +295,7 @@ export class Store {
       status: r.status as RunningTask["status"],
       startedAt: r.started_at as number,
       endedAt: (r.ended_at as number | null) ?? null,
-    }));
+    };
   }
 
   // ---- cron jobs ----
@@ -370,13 +376,31 @@ export class Store {
     this.db.close();
   }
 
-  /** Mark any tasks still recorded as 'running' as aborted. Call at startup:
-   *  a 'running' row can only exist if the previous process died mid-task. */
-  sweepStaleRunning(): number {
-    const res = this.db
+  /** At startup, mark any tasks still recorded as 'running' as aborted and
+   *  return them so the caller can notify each affected chat. A 'running' row
+   *  can only exist if the previous process died mid-task (watchdog / OOM /
+   *  crash) — the dead process never ran its dashboard finalize, so without a
+   *  startup notification the user is left staring at a frozen "任务进行中"
+   *  card with no message and assumes the task hung. Returns the swept rows in
+   *  their post-sweep (aborted) state, carrying chatId/prompt/projectPath for
+   *  the notification. SELECT-then-UPDATE is safe at startup: nothing runs
+   *  concurrently. (An intentional /restart is unaffected — cobot.sh's cmd_stop
+   *  pre-sweeps via sqlite3, so this finds zero rows then.) */
+  sweepStaleRunning(): RunningTask[] {
+    const rows = this.db
+      .prepare("SELECT * FROM running_tasks WHERE status = 'running'")
+      .all() as Array<Record<string, unknown>>;
+    if (rows.length === 0) return [];
+    const now = Date.now();
+    this.db
       .prepare("UPDATE running_tasks SET status = 'aborted', ended_at = ? WHERE status = 'running'")
-      .run(Date.now());
-    return res.changes;
+      .run(now);
+    return rows.map((r) => {
+      const t = this.mapRunningTask(r);
+      t.status = "aborted";
+      t.endedAt = now;
+      return t;
+    });
   }
 
   // ---- queued tasks (persistent task queue) ----

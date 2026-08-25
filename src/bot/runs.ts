@@ -78,7 +78,7 @@ export interface RunOutcome {
  * persist the result. Does NOT touch the registry's active/queue state - the
  * caller (runOne) owns start/finish + draining.
  */
-async function runTurn(opts: {
+export async function runTurn(opts: {
   api: Api;
   chatId: number;
   projectPath: string;
@@ -91,8 +91,11 @@ async function runTurn(opts: {
   abortSignal: AbortSignal;
   taskId?: string;
   onSessionId?: (id: string) => void;
+  /** Test seam: inject a fake driver instead of the real SDK query. */
+  runClaudeFn?: typeof runClaude;
 }): Promise<RunOutcome> {
-  const { api, chatId, projectPath, sessionId, prompt, config, registry, store, origin, abortSignal, taskId, onSessionId } = opts;
+  const { api, chatId, projectPath, sessionId, prompt, config, registry, store, origin, abortSignal, taskId, onSessionId, runClaudeFn } = opts;
+  const driver = runClaudeFn ?? runClaude;
 
   const indicator = new SilenceIndicator(api, chatId);
 
@@ -239,7 +242,7 @@ async function runTurn(opts: {
     let attemptAborted = false;
 
     try {
-      for await (const ev of runClaude({
+      for await (const ev of driver({
         prompt,
         cwd: projectPath,
         resume: resumeId,
@@ -355,6 +358,19 @@ async function runTurn(opts: {
               driverAborted = true;
               if (ev.abortedReason) abortedReason = ev.abortedReason;
               terminalStatus = "aborted";
+              // Finalize the dashboard into the settlement card here, mirroring
+              // the turnsExhausted/success branches which also finalize inside
+              // the switch. The post-loop `else if (attemptAborted)` finalize
+              // below is UNREACHABLE for this case: `attemptAborted` triggers
+              // the `break` at the loop guard, exiting before that code runs.
+              // Without this, a timed-out (or /stop-aborted) task left the
+              // "任务进行中" card frozen forever with no notification — the user
+              // saw silence and assumed the task had hung.
+              await dashboard.finalize({
+                status: "aborted",
+                durationMs: capturedDurationMs,
+                abortedReason: abortedReason === "timeout" ? `超时 (${Math.round(config.claude.taskTimeoutMs / 60000)}m)` : "用户中断",
+              });
             } else {
               success = true;
               terminalStatus = "done";

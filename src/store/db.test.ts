@@ -107,23 +107,39 @@ test("updateTaskStatus changes status and endedAt", () => {
   assert.equal(t.endedAt, 999);
 });
 
-test("sweepStaleRunning marks running tasks as aborted", () => {
+test("sweepStaleRunning marks running tasks as aborted and returns them for notification", () => {
   store.insertTask({ id: "t1", chatId: 1, projectPath: "/p", sessionId: null,
     prompt: "a", status: "running", startedAt: 7, endedAt: null });
   store.insertTask({ id: "t2", chatId: 1, projectPath: "/p", sessionId: null,
     prompt: "b", status: "done", startedAt: 8, endedAt: 9 });
   store.insertTask({ id: "t3", chatId: 2, projectPath: "/q", sessionId: null,
     prompt: "c", status: "running", startedAt: 10, endedAt: null });
-  const swept = (store as any).db.prepare(
-    "UPDATE running_tasks SET status = 'aborted', ended_at = ? WHERE status = 'running'"
-  ).run(Date.now());
-  assert.equal(swept.changes, 2);
-  // Now both running tasks should have been swept.
-  const tasks1 = (store as any).db.prepare("SELECT * FROM running_tasks WHERE chat_id = 1").all() as any[];
-  assert.equal(tasks1.find((t: any) => t.id === "t1").status, "aborted");
-  assert.equal(tasks1.find((t: any) => t.id === "t2").status, "done");
-  const tasks2 = (store as any).db.prepare("SELECT * FROM running_tasks WHERE chat_id = 2").all() as any[];
-  assert.equal(tasks2.find((t: any) => t.id === "t3").status, "aborted");
+
+  const swept = store.sweepStaleRunning();
+
+  // Only the two 'running' rows are swept, and each carries the chatId /
+  // prompt / projectPath the startup notification needs to address the user.
+  assert.equal(swept.length, 2);
+  const t1 = swept.find((t) => t.id === "t1")!;
+  assert.equal(t1.status, "aborted");
+  assert.equal(t1.chatId, 1);
+  assert.equal(t1.prompt, "a");
+  assert.equal(t1.projectPath, "/p");
+  assert.equal(typeof t1.endedAt, "number");
+  const t3 = swept.find((t) => t.id === "t3")!;
+  assert.equal(t3.status, "aborted");
+  assert.equal(t3.chatId, 2);
+  assert.equal(t3.prompt, "c");
+  assert.equal(t3.projectPath, "/q");
+
+  // DB state: the 'running' rows are now aborted; the 'done' row untouched.
+  assert.equal(store.listTasks(1).find((t) => t.id === "t1")!.status, "aborted");
+  assert.equal(store.listTasks(1).find((t) => t.id === "t2")!.status, "done");
+  assert.equal(store.listTasks(2).find((t) => t.id === "t3")!.status, "aborted");
+});
+
+test("sweepStaleRunning returns [] when nothing is running", () => {
+  assert.deepEqual(store.sweepStaleRunning(), []);
 });
 
 // ── cron jobs ─────〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
