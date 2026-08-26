@@ -252,11 +252,24 @@ test("buildPermissionRequest forwards SDK opts into a bot-layer request", () => 
   assert.deepEqual(req.suggestions, []);
 });
 
-test("toSdkPermissionResult: allow carries updatedPermissions", () => {
-  assert.deepEqual(toSdkPermissionResult({ behavior: "allow" }), { behavior: "allow", updatedPermissions: undefined });
+test("toSdkPermissionResult: allow carries updatedInput + updatedPermissions", () => {
+  // No originalInput passed → updatedInput: undefined (unit-test path; the real
+  // canUseTool wrapper always passes the tool's input).
+  assert.deepEqual(toSdkPermissionResult({ behavior: "allow" }), { behavior: "allow", updatedInput: undefined, updatedPermissions: undefined });
   assert.deepEqual(
     toSdkPermissionResult({ behavior: "allow", updatedPermissions: [{ type: "addRules", rules: [], behavior: "allow", destination: "session" }] }),
-    { behavior: "allow", updatedPermissions: [{ type: "addRules", rules: [], behavior: "allow", destination: "session" }] },
+    { behavior: "allow", updatedInput: undefined, updatedPermissions: [{ type: "addRules", rules: [], behavior: "allow", destination: "session" }] },
+  );
+});
+
+test("toSdkPermissionResult: allow threads originalInput as updatedInput", () => {
+  // Regression guard: the SDK's runtime Zod schema REQUIRES `updatedInput` (a
+  // record) on an allow. Without it canUseTool's allow is rejected as a
+  // permission error and the tool never runs ("the bot won't run Bash / write
+  // files"). The original input means "allow, run unchanged".
+  assert.deepEqual(
+    toSdkPermissionResult({ behavior: "allow" }, { command: "node -e 'console.log(42)'" }),
+    { behavior: "allow", updatedInput: { command: "node -e 'console.log(42)'" }, updatedPermissions: undefined },
   );
 });
 

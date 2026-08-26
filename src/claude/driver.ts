@@ -62,12 +62,16 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
       options.canUseTool = async (toolName, input, opts) => {
         const req = buildPermissionRequest(toolName, input, opts, params.cwd);
         const dec = await handler(req, opts.signal);
-        return toSdkPermissionResult(dec);
+        // Thread the original input into the allow result (see toSdkPermissionResult):
+        // the SDK's runtime Zod schema REQUIRES `updatedInput` (a record) on an
+        // allow, so a bare {behavior:"allow"} fails validation and the tool is
+        // rejected as a permission error before it ever runs.
+        return toSdkPermissionResult(dec, input);
       };
     } else {
-      options.canUseTool = async (toolName) => {
+      options.canUseTool = async (toolName, input) => {
         logger.debug({ toolName }, "canUseTool: auto-approved");
-        return { behavior: "allow" as const };
+        return { behavior: "allow" as const, updatedInput: input };
       };
     }
   }
@@ -378,10 +382,22 @@ export function buildPermissionRequest(
   };
 }
 
-/** Map a bot-layer {@link PermissionDecision} to the SDK's PermissionResult. */
-export function toSdkPermissionResult(dec: PermissionDecision): PermissionResult {
+/** Map a bot-layer {@link PermissionDecision} to the SDK's PermissionResult.
+ *
+ *  `originalInput` is required on an allow: the SDK's runtime Zod schema for an
+ *  allow control_response REQUIRES `updatedInput` (a record). Returning a bare
+ *  `{behavior:"allow"}` fails validation ("expected record, received undefined"
+ *  at path ["updatedInput"]) and the tool is rejected as a permission error —
+ *  which presented as "the bot won't run Bash / won't write files" across both
+ *  default and acceptEdits modes. Passing the original input means "allow, run
+ *  the tool exactly as the model requested, unmodified". */
+export function toSdkPermissionResult(dec: PermissionDecision, originalInput?: Record<string, unknown>): PermissionResult {
   if (dec.behavior === "allow") {
-    return { behavior: "allow", updatedPermissions: dec.updatedPermissions as PermissionUpdate[] | undefined };
+    return {
+      behavior: "allow",
+      updatedInput: originalInput,
+      updatedPermissions: dec.updatedPermissions as PermissionUpdate[] | undefined,
+    };
   }
   return { behavior: "deny", message: dec.message };
 }
