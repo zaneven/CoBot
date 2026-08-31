@@ -415,8 +415,13 @@ cmd_update() {
   fi
 
   echo "[+] Updating dependencies..."
-  if ! npm install --no-fund --no-audit --loglevel=error; then
-    echo "[!] npm install failed — CoBot is stopped. Fix deps in ${ROOT_DIR}, then run 'cobot start'."
+  # Use `npm ci` (not `npm install`) for self-updates: it installs exactly
+  # what package-lock.json pins and NEVER rewrites the lockfile. `npm install`
+  # can regenerate package-lock.json (npm version drift, platform-specific
+  # optional deps like better-sqlite3/esbuild), leaving a dirty working tree
+  # that then blocks the next 'cobot update' with "Uncommitted local changes".
+  if ! npm ci --no-fund --no-audit --loglevel=error; then
+    echo "[!] npm ci failed — CoBot is stopped. Fix deps in ${ROOT_DIR}, then run 'cobot start'."
     return 1
   fi
 
