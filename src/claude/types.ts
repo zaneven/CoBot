@@ -9,9 +9,20 @@ export type DriverEvent =
   | { kind: "thinking"; delta: string }
   | { kind: "tool"; name: string; summary: string }
   | { kind: "toolResult"; name: string; content: string; isError: boolean }
+  | { kind: "todos"; todos: TodoItem[] }
   | { kind: "status"; status: string }
   | { kind: "done"; text: string; isError: boolean; aborted: boolean; abortedReason?: "timeout" | "user"; turnsExhausted?: boolean; costUsd?: number; durationMs?: number; usage?: { inputTokens: number; outputTokens: number }; contextUsagePct?: number }
   | { kind: "error"; message: string };
+
+/** A single task-tracker item from Claude Code's TodoWrite tool. */
+export type TodoStatus = "pending" | "in_progress" | "completed";
+
+export interface TodoItem {
+  content: string;
+  status: TodoStatus;
+  /** Short "doing" form (e.g. "同步 shared 层镜像") shown in the live header. */
+  activeForm?: string;
+}
 
 /** MIME types the Anthropic image content block accepts as base64. */
 export type ImageMime = "image/jpeg" | "image/png" | "image/gif" | "image/webp";

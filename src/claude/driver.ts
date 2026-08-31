@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { query, type Options, type SDKMessage, type SDKUserMessage, type ModelUsage, type PermissionResult, type PermissionUpdate, type UserDialogResult as SdkUserDialogResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ContentBlockParam } from "@anthropic-ai/sdk/resources";
-import type { DriverEvent, RunParams, PromptInput, MediaAttachment, PermissionRequest, PermissionDecision, UserDialogRequest, UserDialogResult } from "./types.js";
+import type { DriverEvent, RunParams, PromptInput, MediaAttachment, PermissionRequest, PermissionDecision, UserDialogRequest, UserDialogResult, TodoItem } from "./types.js";
 import { logger } from "../util/logger.js";
 
 /**
@@ -170,6 +170,12 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
             } else if (block.type === "tool_use") {
               const name = block.name ?? "tool";
               if (block.id) toolNames.set(block.id, name);
+              // Surface the task-tracker plan: the model updates its todo list
+              // via TodoWrite, and each update carries the complete new list.
+              if (name === "TodoWrite") {
+                const todos = parseTodos(block.input);
+                if (todos) yield { kind: "todos", todos };
+              }
               yield { kind: "tool", name, summary: summarizeToolInput(block.input) };
               // A tool was used → the next incoming delta starts a new round.
               const r = shouldStartRound({ roundActive, pendingNewRound }, "tool");
@@ -458,11 +464,45 @@ function mediaBlock(m: MediaAttachment): ContentBlockParam[] {
 function summarizeToolInput(input: unknown): string {
   if (input && typeof input === "object") {
     const o = input as Record<string, unknown>;
+    if (Array.isArray(o.todos)) {
+      const list = parseTodos(input);
+      if (list) {
+        const done = list.filter((t) => t.status === "completed").length;
+        return `更新任务清单 ${done}/${list.length}`;
+      }
+    }
     for (const key of ["command", "file_path", "path", "pattern", "url", "query"]) {
       if (typeof o[key] === "string") return truncate(o[key] as string, 100);
     }
   }
   return truncate(JSON.stringify(input), 100);
+}
+
+/**
+ * Parse the `todos` array carried by a TodoWrite tool input into bot-layer
+ * {@link TodoItem}s. Returns null when the payload doesn't carry a well-formed
+ * list, so callers can skip non-todo tool calls safely.
+ */
+export function parseTodos(input: unknown): TodoItem[] | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = (input as Record<string, unknown>).todos;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const items: TodoItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return null;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.content !== "string" || !e.content.trim()) return null;
+    const status = e.status;
+    if (status !== "pending" && status !== "in_progress" && status !== "completed") return null;
+    items.push({
+      content: e.content,
+      status,
+      ...(typeof e.activeForm === "string" && e.activeForm.trim()
+        ? { activeForm: e.activeForm }
+        : {}),
+    });
+  }
+  return items;
 }
 
 function truncate(s: string, n: number): string {

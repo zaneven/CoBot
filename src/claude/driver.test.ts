@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PromptInput } from "./types.js";
-import { buildSdkPrompt, parseContextFromModelId, computeContextUsagePct, mapContentBlockDelta, buildPermissionRequest, toSdkPermissionResult, shouldStartRound, isMaxTurnsResult } from "./driver.js";
+import { buildSdkPrompt, parseContextFromModelId, computeContextUsagePct, mapContentBlockDelta, buildPermissionRequest, toSdkPermissionResult, shouldStartRound, isMaxTurnsResult, parseTodos } from "./driver.js";
 import type { ModelUsage } from "@anthropic-ai/claude-agent-sdk";
 
 type Block = { type: string; text?: string; source?: { type: string; media_type: string; data: string } };
@@ -283,6 +283,32 @@ test("isMaxTurnsResult: error_max_turns is the max-turns terminal subtype", () =
   assert.equal(isMaxTurnsResult("error_max_budget_usd"), false);
   assert.equal(isMaxTurnsResult("completed"), false);
   assert.equal(isMaxTurnsResult(undefined), false);
+});
+
+// ─── parseTodos: TodoWrite payload → TodoItem[] ─────────────────────────
+
+test("parseTodos: parses a well-formed todo list, omitting empty activeForm", () => {
+  const items = parseTodos({
+    todos: [
+      { content: "sync shared layer", status: "in_progress", activeForm: "syncing shared layer" },
+      { content: "add tests", status: "pending", activeForm: "" },
+      { content: "update docs", status: "completed" },
+    ],
+  });
+  assert.deepEqual(items, [
+    { content: "sync shared layer", status: "in_progress", activeForm: "syncing shared layer" },
+    { content: "add tests", status: "pending" },
+    { content: "update docs", status: "completed" },
+  ]);
+});
+
+test("parseTodos: returns null for non-todo / malformed payloads", () => {
+  assert.equal(parseTodos(null), null);
+  assert.equal(parseTodos("nope"), null);
+  assert.equal(parseTodos({ command: "ls" }), null);
+  assert.equal(parseTodos({ todos: [] }), null);
+  assert.equal(parseTodos({ todos: [{ content: "", status: "pending" }] }), null);
+  assert.equal(parseTodos({ todos: [{ content: "x", status: "weird" }] }), null);
 });
 
 test("mapContentBlockDelta: sequences thinking then text across multiple deltas", () => {

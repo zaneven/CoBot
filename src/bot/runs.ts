@@ -10,6 +10,7 @@ import { logger } from "../util/logger.js";
 import { approvalManager } from "./approval.js";
 import { dialogManager } from "./dialog.js";
 import { TaskDashboard } from "./dashboard.js";
+import { TodoPanel } from "./todoPanel.js";
 import { TelegramStreamer } from "./streaming.js";
 import { buildNextActions, renderSuggestionKeyboard, extractNextActions, NEXT_ACTIONS_DIRECTIVE } from "./nextActions.js";
 
@@ -158,6 +159,9 @@ export async function runTurn(opts: {
   let lastNarration = "";
   const dashboard = new TaskDashboard(api, chatId, config.telegram.flushMs);
   let dashboardStarted = false;
+  // Live Claude-Code-style task-tracker panel: the first TodoWrite call from
+  // the model sends a dedicated message, and later calls edit it in place.
+  const todoPanel = new TodoPanel(api, chatId, config.telegram.flushMs);
   // When the trace-text feature is on, the intermediate narration is streamed
   // progressively into its own message (a growing bullet list of completed
   // blocks) as the run proceeds, then finalized into that same message holding
@@ -313,6 +317,11 @@ export async function runTurn(opts: {
           case "toolResult":
             indicator.activity();
             pushTrace("toolResult", { name: ev.name, content: ev.content.slice(0, 1500), isError: ev.isError });
+            break;
+          case "todos":
+            indicator.activity();
+            todoPanel.update(ev.todos);
+            pushTrace("todos", { todos: ev.todos });
             break;
           case "status":
             if (ev.status === "compacting") indicator.compacting();
@@ -530,6 +539,13 @@ export async function runTurn(opts: {
       } catch {
         /* best effort — never block the return on a telegram edit failure */
       }
+    }
+    // Pin the live task-tracker panel at its final state. No-op when the model
+    // never produced a todo plan, and idempotent if already finalized.
+    try {
+      await todoPanel.finalize();
+    } catch {
+      /* best effort */
     }
   }
 
