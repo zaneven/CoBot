@@ -105,6 +105,10 @@ export async function runTurn(opts: {
   // Otherwise the driver falls back to headless auto-approve.
   const approvalCfg = config.claude.approval;
   const chatMode = store.getBinding(chatId)?.approvalMode ?? approvalCfg?.mode ?? "auto";
+  // Model for this run: the chat's /models pick wins, else the global config
+  // default. Undefined means "don't set options.model" — the Claude Code CLI
+  // (or its gateway) picks its own default.
+  const model = store.getBinding(chatId)?.model ?? config.claude.model;
   const installApproval = chatMode === "interactive" && origin !== "cron" && !!approvalCfg;
   const canUseToolHandler = installApproval && approvalCfg
     ? (req: PermissionRequest, sig: AbortSignal): Promise<PermissionDecision> =>
@@ -250,7 +254,7 @@ export async function runTurn(opts: {
         prompt,
         cwd: projectPath,
         resume: resumeId,
-        model: config.claude.model,
+        model,
         permissionMode: config.claude.permissionMode,
         allowedTools: config.claude.allowedTools,
         allowDangerouslySkipPermissions:

@@ -28,6 +28,7 @@ here too.
 | `/cron enable <id>` / `disable <id>` | Pause or resume a cron job without deleting it. |
 | `/context` | Show the last turn's context-window usage % (in-memory; reset on restart). |
 | `/skills` | Browse available skills as a paginated inline keyboard. Tap a skill to fill the input bar (inline-query mode), then type your query. |
+| `/models [<id>\|off]` | Show or change the per-chat Claude model. No arg opens a button picker (list configured via `defaults.models` in config.yaml); `<id>` sets any model id directly; `off` clears the pick so runs follow the global config default (or the SDK default when unset). Applies from the next task, including queued and cron runs. |
 | `/approve` | Show the current tool-approval mode and the per-chat "always-allow" tool list, with a toggle keyboard. |
 | `/approve auto` / `interactive` | Switch the approval mode: `auto` auto-approves every tool call; `interactive` prompts for mutating tools (read-only tools in `skipTools` are still auto-allowed). |
 | `/approve clear <tool\|all>` | Remove "always-allow" rules — a single tool, or `all` of them. |

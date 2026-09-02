@@ -224,6 +224,7 @@ cobot status    # 进程、代理、最近日志
 | `/cron list \| rm <id> \| enable <id> \| disable <id>` | 管理定时任务 |
 | `/context` | 上一轮上下文窗口用量（%） |
 | `/skills` | 浏览可用 Skills（点击使用） |
+| `/models [<id>\|off]` | 选择 Claude 模型（按钮选择，按聊天生效；候选列表来自 `defaults.models`） |
 | `/approve auto\|interactive\|list\|clear <tool\|all>` | 工具调用审批模式 |
 | `/help` | 显示此列表 |
 

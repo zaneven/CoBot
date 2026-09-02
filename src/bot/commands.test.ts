@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { InlineKeyboard, Context } from "grammy";
-import { renderProjectsKeyboard, renderApprovalKeyboard, handleApprove, handleApproveModeCallback, handleBot, buildActionKeyboard } from "./commands.js";
+import { renderProjectsKeyboard, renderApprovalKeyboard, handleApprove, handleApproveModeCallback, handleBot, buildActionKeyboard, renderModelsKeyboard, handleModels, handleModelCallback } from "./commands.js";
 
 // grammY's InlineKeyboard instance carries the built grid on `.inline_keyboard`.
 type Button = { text?: string; callback_data?: string };
@@ -237,3 +237,117 @@ test("buildActionKeyboard renders 2 rows of 3 English buttons without approval",
   assert.ok(!allTexts.includes("Approve"), "should not contain Approve");
 });
 
+
+// ── /models — per-chat model picker ──────────────────────────────────
+
+/** Store double for /models tests: tracks the per-chat model and reports a
+ *  bound project unless `bound` is false. */
+function mkModelStore(initialModel: string | null = null, bound = true) {
+  let model = initialModel;
+  return {
+    get model() {
+      return model;
+    },
+    getBinding: () =>
+      bound
+        ? { chatId: 123, projectPath: "/x", sessionId: null, approvalMode: null, model, createdAt: 0, updatedAt: 0 }
+        : undefined,
+    setModel: (_id: number, m: string | null) => {
+      model = m;
+    },
+  } as unknown as import("../store/db.js").Store & { model: string | null };
+}
+
+const MODELS = ["m-one[1M]", "m-two", "org/m-three"];
+
+test("renderModelsKeyboard: one row per model + default row, ✅ marks the pick", () => {
+  const picked = rows(renderModelsKeyboard(MODELS, "m-two"));
+  assert.equal(picked.length, 4, "3 model rows + default row");
+  assert.equal(picked[0]![0]!.callback_data, "model:0");
+  assert.equal(picked[1]![0]!.text, "✅ m-two");
+  assert.equal(picked[1]![0]!.callback_data, "model:1");
+  assert.equal(picked[3]![0]!.text, "⚪ 默认 (跟随配置)");
+  assert.equal(picked[3]![0]!.callback_data, "model:__default__");
+
+  const none = rows(renderModelsKeyboard(MODELS, null));
+  assert.equal(none[3]![0]!.text, "✅ 默认 (跟随配置)", "default highlighted when no pick");
+  const firstBtn = none[0]![0]!;
+  assert.ok(!firstBtn.text?.startsWith("✅"), "no model highlighted");
+});
+
+test("renderModelsKeyboard with empty list still offers the default button", () => {
+  const r = rows(renderModelsKeyboard([], null));
+  assert.equal(r.length, 1);
+  assert.equal(r[0]![0]!.callback_data, "model:__default__");
+});
+
+test("handleModels (no arg) replies with status + keyboard", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleModels(ctx, { claude: { models: MODELS } } as never, mkModelStore(null));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /模型选择/);
+  assert.match(sent[0]!.text, /默认（不指定）/);
+  assert.ok((sent[0]!.opts as { reply_markup?: unknown })?.reply_markup, "carries inline keyboard");
+});
+
+test("handleModels <id> sets the model on the binding", async () => {
+  const store = mkModelStore(null);
+  const { ctx, sent } = mkCtx({ match: "deepseek-v4-pro[1m]" });
+  await handleModels(ctx, { claude: { models: [] } } as never, store);
+  assert.equal(store.model, "deepseek-v4-pro[1m]", "model persisted");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /deepseek-v4-pro\[1m\]/);
+});
+
+test("handleModels off/default clears the pick", async () => {
+  const store = mkModelStore("m-two");
+  const { ctx, sent } = mkCtx({ match: "off" });
+  await handleModels(ctx, { claude: { models: MODELS } } as never, store);
+  assert.equal(store.model, null);
+  assert.match(sent[0]!.text, /默认（不指定）/);
+  const { ctx: ctx2 } = mkCtx({ match: "默认" });
+  await handleModels(ctx2, { claude: { models: MODELS } } as never, store);
+  assert.equal(store.model, null);
+});
+
+test("handleModels <id> without a bound project refuses", async () => {
+  const store = mkModelStore(null, false);
+  const { ctx, sent } = mkCtx({ match: "m-two" });
+  await handleModels(ctx, { claude: { models: MODELS } } as never, store);
+  assert.match(sent[0]!.text, /\/projects/);
+});
+
+test("handleModelCallback selects by index, edits status, answers", async () => {
+  const store = mkModelStore(null);
+  const { ctx, edited, answered } = mkCtx({ callbackQuery: { data: "model:2" } });
+  await handleModelCallback(ctx, { claude: { models: MODELS } } as never, store);
+  assert.equal(store.model, "org/m-three", "model persisted");
+  assert.equal(edited.length, 1, "status message refreshed");
+  assert.match(edited[0]!.text, /org\/m-three/);
+  assert.equal((answered[0] as { text?: string })?.text, "已切换为 org/m-three");
+});
+
+test("handleModelCallback default clears the pick", async () => {
+  const store = mkModelStore("m-two");
+  const { ctx, answered } = mkCtx({ callbackQuery: { data: "model:__default__" } });
+  await handleModelCallback(ctx, { claude: { models: MODELS } } as never, store);
+  assert.equal(store.model, null);
+  assert.equal((answered[0] as { text?: string })?.text, "已恢复默认");
+});
+
+test("handleModelCallback with a stale index answers gracefully and changes nothing", async () => {
+  const store = mkModelStore("m-two");
+  const { ctx, edited, answered } = mkCtx({ callbackQuery: { data: "model:9" } });
+  await handleModelCallback(ctx, { claude: { models: MODELS } } as never, store);
+  assert.equal(store.model, "m-two", "model unchanged");
+  assert.equal(edited.length, 0, "no edit on stale index");
+  assert.equal((answered[0] as { text?: string })?.text, "该选项已失效，请重新 /models");
+});
+
+test("handleModelCallback refuses when no project is bound", async () => {
+  const store = mkModelStore(null, false);
+  const { ctx, answered } = mkCtx({ callbackQuery: { data: "model:0" } });
+  await handleModelCallback(ctx, { claude: { models: MODELS } } as never, store);
+  assert.equal(store.model, null);
+  assert.equal((answered[0] as { text?: string })?.text, "请先 /projects 选择项目");
+});

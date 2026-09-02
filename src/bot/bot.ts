@@ -30,6 +30,8 @@ import {
   handleContext,
   handleSkills,
   handleSkillsPage,
+  handleModels,
+  handleModelCallback,
   handleNewProjectClick,
   handleApprove,
   handleApproveModeCallback,
@@ -91,6 +93,7 @@ export function createBot(
   bot.command("cron", (ctx) => handleCron(ctx, store, cron));
   bot.command("context", (ctx) => handleContext(ctx, registry));
   bot.command("skills", (ctx) => handleSkills(ctx));
+  bot.command("models", (ctx) => handleModels(ctx, config, store));
   bot.command("approve", (ctx) => handleApprove(ctx, store));
   bot.command("bot", (ctx) => handleBot(ctx));
   // /restart is a convenience alias for /bot restart.
@@ -98,6 +101,10 @@ export function createBot(
 
   // /skills pagination: prev/next buttons (skp:<page>).
   bot.callbackQuery(/^skp:/, (ctx) => handleSkillsPage(ctx));
+
+  // /models model pick (model:<index> into the config list, or
+  // model:__default__ to clear the per-chat override).
+  bot.callbackQuery(/^model:/, (ctx) => handleModelCallback(ctx, config, store));
 
   // Inline-button approval decisions (appr:<shortId>:<action>).
   bot.callbackQuery(/^appr:/, (ctx) => approvalManager.handleCallback(ctx));

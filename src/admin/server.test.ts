@@ -16,6 +16,7 @@ function makeConfig(port: number): Config {
       permissionMode: "acceptEdits",
       allowDangerousSkip: false,
       taskTimeoutMs: 600000,
+      models: [],
     },
     admin: {
       enabled: true,

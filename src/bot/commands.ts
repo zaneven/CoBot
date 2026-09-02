@@ -38,6 +38,7 @@ export const BOT_COMMANDS: readonly BotCommandDef[] = [
   { command: "cron", usage: "/cron <5-field cron> | <prompt>", description: "schedule a task" },
   { command: "context", usage: "/context", description: "last turn's context window usage"},
   { command: "skills", usage: "/skills", description: "browse and select skills" },
+  { command: "models", usage: "/models [<id>|off]", description: "pick the Claude model (buttons)" },
   { command: "approve", usage: "/approve auto|interactive", description: "tool-call approval mode" },
   { command: "bot", usage: "/bot <start|stop|restart|status|install>", description: "control the bot (--watch for hot-reload)" },
   { command: "restart", usage: "/restart", description: "restart the bot (keeps current launch mode)" },
@@ -706,6 +707,139 @@ export async function handleSkillsPage(ctx: Context): Promise<void> {
     logger.debug({ err: String(err) }, "skills page nav edit failed");
   }
   await ctx.answerCallbackQuery({});
+}
+
+// ── /models — per-chat Claude model picker ──────────────────────────────
+
+/** Callback data for the "default" (clear per-chat override) button. Deliberately
+ *  non-numeric so it can never collide with an index into the models list. */
+const MODEL_DEFAULT_CB = "__default__";
+/** Inline-button callback prefix for /models (`model:<index>` into the config
+ *  pick list, or `model:__default__`). Distinct from every other callback
+ *  prefix; wired in bot.ts via /^model:/. */
+const MODEL_CB_PREFIX = "model:";
+
+/** Inline keyboard for /models: one button per configured model (its index in
+ *  the list is the callback payload, keeping callback_data short), the current
+ *  pick highlighted with ✅, and a bottom "default" row that clears the
+ *  per-chat override. */
+export function renderModelsKeyboard(models: string[], current: string | null): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  models.forEach((m, i) => {
+    kb.text(`${m === current ? "✅ " : ""}${truncate(m, 60)}`, `${MODEL_CB_PREFIX}${i}`).row();
+  });
+  const defLbl = current === null ? "✅ 默认 (跟随配置)" : "⚪ 默认 (跟随配置)";
+  return kb.text(defLbl, `${MODEL_CB_PREFIX}${MODEL_DEFAULT_CB}`);
+}
+
+/** Status text for /models and its callback edits. */
+function modelStatusText(selected: string | null, globalModel: string | undefined): string {
+  const selTxt = selected ?? "默认（不指定）";
+  const globTxt = globalModel ?? "(未设置)";
+  return (
+    `🧠 模型选择\n` +
+    `• 当前会话: ${selTxt}\n` +
+    `• 全局配置: ${globTxt}\n\n` +
+    `生效规则: 会话选择 > 全局配置 > Claude Code 默认\n` +
+    `点按钮切换；「默认」清除会话选择；或 /models <模型ID> 直接设置。`
+  );
+}
+
+/**
+ * /models — view or set the per-chat Claude model.
+ *
+ *   /models            → show the current selection + button picker
+ *   /models <id>       → set the model (any id the CLI/gateway accepts)
+ *   /models off|default→ clear the pick (follow global config / CLI default)
+ *
+ * The selection persists on the binding (like /approve's mode) and applies to
+ * the next dispatched task, including queued and cron runs for this chat.
+ */
+export async function handleModels(ctx: Context, config: Config, store: Store): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const arg = (typeof ctx.match === "string" ? ctx.match.trim() : "");
+  const current = store.getBinding(chatId)?.model ?? null;
+
+  // No arg → status + button picker (viewing works without a bound project).
+  if (!arg) {
+    await ctx.reply(modelStatusText(current, config.claude.model), {
+      reply_markup: renderModelsKeyboard(config.claude.models, current),
+    });
+    return;
+  }
+
+  // Setting requires a binding — the pick lives on it.
+  if (!store.getBinding(chatId)) {
+    await ctx.reply("先选择项目: /projects");
+    return;
+  }
+
+  const lower = arg.toLowerCase();
+  if (lower === "off" || lower === "default" || arg === "默认") {
+    store.setModel(chatId, null);
+    await ctx.reply(modelStatusText(null, config.claude.model), {
+      reply_markup: renderModelsKeyboard(config.claude.models, null),
+    });
+    return;
+  }
+
+  store.setModel(chatId, arg);
+  await ctx.reply(modelStatusText(arg, config.claude.model), {
+    reply_markup: renderModelsKeyboard(config.claude.models, arg),
+  });
+}
+
+/** Refresh an already-sent /models status message after a button tap. */
+async function editModelStatus(ctx: Context, config: Config, store: Store, selected: string | null): Promise<void> {
+  try {
+    await ctx.editMessageText(modelStatusText(selected, config.claude.model), {
+      reply_markup: renderModelsKeyboard(config.claude.models, selected),
+    });
+  } catch (err) {
+    logger.debug({ err: String(err) }, "models status edit failed");
+  }
+}
+
+/** Callback for inline `model:<index>` / `model:__default__` buttons. Switches
+ *  the chat's model and refreshes the keyboard so the ✅ marker moves. */
+export async function handleModelCallback(ctx: Context, config: Config, store: Store): Promise<void> {
+  const data = ctx.callbackQuery?.data ?? "";
+  if (!data.startsWith(MODEL_CB_PREFIX)) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  const chatId = ctx.chat?.id;
+  if (!chatId) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  if (!store.getBinding(chatId)) {
+    await ctx.answerCallbackQuery({ text: "请先 /projects 选择项目" });
+    return;
+  }
+
+  const key = data.slice(MODEL_CB_PREFIX.length);
+  if (key === MODEL_DEFAULT_CB) {
+    store.setModel(chatId, null);
+    await editModelStatus(ctx, config, store, null);
+    await ctx.answerCallbackQuery({ text: "已恢复默认" });
+    return;
+  }
+
+  // Buttons carry the index into the current config pick list; a stale keyboard
+  // (config changed since it was rendered) answers gracefully instead of
+  // selecting the wrong model.
+  const idx = Number.parseInt(key, 10);
+  const models = config.claude.models;
+  if (!Number.isInteger(idx) || idx < 0 || idx >= models.length) {
+    await ctx.answerCallbackQuery({ text: "该选项已失效，请重新 /models" });
+    return;
+  }
+  const model = models[idx]!;
+  store.setModel(chatId, model);
+  await editModelStatus(ctx, config, store, model);
+  await ctx.answerCallbackQuery({ text: `已切换为 ${model}` });
 }
 
 /** /auto [off] — toggle persistent auto‑session mode. Stays active until /auto off or restart. */

@@ -31,6 +31,8 @@ approval:
 # Defaults applied to every Claude run unless overridden by env / a /run flag.
 defaults:
   # model: "claude-3-7-sonnet-20250219" # default Claude model (env CLAUDE_MODEL overrides)
+  # models: [] # button pick list for the Telegram /models command (env CLAUDE_MODELS overrides).
+               # Per-chat picks (/models in Telegram) win over `model`; unset everywhere = SDK default.
   maxTurns: 50 # cap on agentic turns per task (DEFAULT_MAX_TURNS = 50, 0 = unlimited)
   taskTimeoutMs: 600000 # hard per-task wall-clock timeout in ms (default 10 min, must be > approval.timeoutMs)
   dailyCostCapUsd: 200.0 # example: $5 per chat per day (undefined = no cap)

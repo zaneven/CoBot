@@ -228,6 +228,7 @@ Each Telegram chat binds to **one whitelisted project directory**. Every prompt 
 | `/cron list \| rm <id> \| enable <id> \| disable <id>` | Manage cron jobs |
 | `/context` | Last turn's context-window usage (%) |
 | `/skills` | Browse available Skills (tap to use) |
+| `/models [<id>\|off]` | Pick the Claude model — button picker, per chat (list via `defaults.models`) |
 | `/approve auto\|interactive\|list\|clear <tool\|all>` | Tool-call approval mode |
 | `/help` | Show this list |
 

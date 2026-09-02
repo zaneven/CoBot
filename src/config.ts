@@ -53,6 +53,9 @@ export interface Config {
   allowedUsers: Set<number>;
   claude: {
     model?: string;
+    /** Pick list offered as buttons by /models. Empty list = only the "default"
+     *  button plus an /models <id> free-form input. */
+    models: string[];
     /** SDK permission mode. Only the two headless-compatible values are
      *  supported: 'acceptEdits' (auto-accept edits + canUseTool auto-approves
      *  other tools) and 'bypassPermissions' (skip all checks, needs
@@ -99,7 +102,7 @@ export interface Config {
 export interface YamlConfig {
   projects?: string[];
   devRoots?: string[];
-  defaults?: { model?: string; maxTurns?: number; taskTimeoutMs?: number; dailyCostCapUsd?: number; dailyTokenCap?: number; showTraceText?: boolean };
+  defaults?: { model?: string; models?: string[]; maxTurns?: number; taskTimeoutMs?: number; dailyCostCapUsd?: number; dailyTokenCap?: number; showTraceText?: boolean };
   telegram?: {
     botToken?: string;
     allowedUsers?: number[] | string;
@@ -310,6 +313,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
     allowedUsers,
     claude: {
       model: process.env.CLAUDE_MODEL ?? yaml.defaults?.model,
+      models: envList("CLAUDE_MODELS") ?? yaml.defaults?.models ?? [],
       permissionMode,
       allowedTools: envList("CLAUDE_ALLOWED_TOOLS"),
       allowDangerousSkip,

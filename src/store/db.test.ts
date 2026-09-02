@@ -57,6 +57,38 @@ test("setSessionId updates the sessionId without touching other fields", () => {
   assert.equal(b.projectPath, "/proj");
 });
 
+test("new bindings have model = null (no override)", () => {
+  store.upsertBinding(77, "/proj", null);
+  assert.equal(store.getBinding(77)!.model, null);
+});
+
+test("setModel persists the per-chat model and null clears it", () => {
+  store.upsertBinding(42, "/proj", null);
+  store.setModel(42, "deepseek-v4-pro[1m]");
+  assert.equal(store.getBinding(42)!.model, "deepseek-v4-pro[1m]");
+  store.setModel(42, null);
+  assert.equal(store.getBinding(42)!.model, null);
+});
+
+test("setModel does not touch other binding fields", () => {
+  store.upsertBinding(42, "/proj", "sess-1");
+  store.setApprovalMode(42, "interactive");
+  store.setModel(42, "m1");
+  const b = store.getBinding(42)!;
+  assert.equal(b.projectPath, "/proj");
+  assert.equal(b.sessionId, "sess-1");
+  assert.equal(b.approvalMode, "interactive");
+});
+
+test("model survives a project switch (upsertBinding leaves it alone)", () => {
+  store.upsertBinding(42, "/old", null);
+  store.setModel(42, "m1");
+  store.upsertBinding(42, "/new", null);
+  const b = store.getBinding(42)!;
+  assert.equal(b.projectPath, "/new");
+  assert.equal(b.model, "m1");
+});
+
 test("clearBinding removes the binding", () => {
   store.upsertBinding(42, "/proj", null);
   assert.ok(store.getBinding(42));

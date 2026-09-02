@@ -12,6 +12,8 @@ export interface Binding {
   sessionId: string | null;
   /** Per-chat tool-approval mode (null = use config default). */
   approvalMode: ApprovalMode | null;
+  /** Per-chat model override chosen via /models (null = follow config default). */
+  model: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -100,6 +102,7 @@ CREATE TABLE IF NOT EXISTS bindings (
   project_path TEXT NOT NULL,
   session_id TEXT,
   approval_mode TEXT,
+  model TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -187,6 +190,9 @@ function migrate(db: DB): void {
   if (!cols.some((c) => c.name === "approval_mode")) {
     db.exec("ALTER TABLE bindings ADD COLUMN approval_mode TEXT");
   }
+  if (!cols.some((c) => c.name === "model")) {
+    db.exec("ALTER TABLE bindings ADD COLUMN model TEXT");
+  }
   const tableNames = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
   if (!tableNames.some((t) => t.name === "trace_events")) {
     db.exec(
@@ -217,9 +223,9 @@ export class Store {
   // ---- bindings ----
   getBinding(chatId: number): Binding | undefined {
     const r = this.db
-      .prepare("SELECT chat_id, project_path, session_id, approval_mode, created_at, updated_at FROM bindings WHERE chat_id = ?")
+      .prepare("SELECT chat_id, project_path, session_id, approval_mode, model, created_at, updated_at FROM bindings WHERE chat_id = ?")
       .get(chatId) as
-      | { chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; created_at: number; updated_at: number }
+      | { chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; model: string | null; created_at: number; updated_at: number }
       | undefined;
     if (!r) return undefined;
     return {
@@ -227,6 +233,7 @@ export class Store {
       projectPath: r.project_path,
       sessionId: r.session_id,
       approvalMode: (r.approval_mode as ApprovalMode | null) ?? null,
+      model: r.model ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
@@ -251,6 +258,12 @@ export class Store {
   /** Set the per-chat tool-approval mode. The binding must already exist. */
   setApprovalMode(chatId: number, mode: ApprovalMode): void {
     this.db.prepare("UPDATE bindings SET approval_mode = ?, updated_at = ? WHERE chat_id = ?").run(mode, Date.now(), chatId);
+  }
+
+  /** Set the per-chat model override (null = clear it, follow config default).
+   *  Takes effect on the next dispatched task; the binding must already exist. */
+  setModel(chatId: number, model: string | null): void {
+    this.db.prepare("UPDATE bindings SET model = ?, updated_at = ? WHERE chat_id = ?").run(model, Date.now(), chatId);
   }
 
   clearBinding(chatId: number): void {
@@ -640,13 +653,14 @@ export class Store {
 
   listAllBindings(): Binding[] {
     const rows = this.db
-      .prepare("SELECT chat_id, project_path, session_id, approval_mode, created_at, updated_at FROM bindings ORDER BY updated_at DESC")
-      .all() as Array<{ chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; created_at: number; updated_at: number }>;
+      .prepare("SELECT chat_id, project_path, session_id, approval_mode, model, created_at, updated_at FROM bindings ORDER BY updated_at DESC")
+      .all() as Array<{ chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; model: string | null; created_at: number; updated_at: number }>;
     return rows.map((r) => ({
       chatId: r.chat_id,
       projectPath: r.project_path,
       sessionId: r.session_id,
       approvalMode: (r.approval_mode as ApprovalMode | null) ?? null,
+      model: r.model ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
