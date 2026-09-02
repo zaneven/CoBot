@@ -174,24 +174,24 @@ test("buildTraceReply: returns summary unchanged when there are no intermediate 
   assert.equal(buildTraceReply(["only block"], "only block"), "only block");
 });
 
-test("buildTraceReply: renders each narration block as a bullet, blocks split by ---", () => {
-  const out = buildTraceReply(["step one", "step two", "final summary"], "final summary");
-  assert.equal(out, "**执行过程**\n\n- step one\n\n---\n\n- step two\n\n---\n\nfinal summary");
+test("buildTraceReply: renders each narration block as a blockquote, blocks split by ---", () => {
+  const out = buildTraceReply(["step one:", "step two：", "final summary"], "final summary");
+  assert.equal(out, "##【执行过程】\n\n> step one\n\n---\n\n> step two\n\n---\n\nfinal summary");
 });
 
-test("buildTraceReply: turns each line of a multi-line block into its own bullet", () => {
-  const out = buildTraceReply(["first\nsecond", "summary"], "summary");
-  assert.equal(out, "**执行过程**\n\n- first\n- second\n\n---\n\nsummary");
+test("buildTraceReply: turns each line of a multi-line block into its own blockquote line", () => {
+  const out = buildTraceReply(["first:\nsecond：", "summary"], "summary");
+  assert.equal(out, "##【执行过程】\n\n> first\n> second\n\n---\n\nsummary");
 });
 
-test("buildTraceReply: normalizes existing list markers instead of double-bulleting", () => {
-  const out = buildTraceReply(["- already bulleted\n* star too\n1. numbered", "summary"], "summary");
-  assert.equal(out, "**执行过程**\n\n- already bulleted\n- star too\n- numbered\n\n---\n\nsummary");
+test("buildTraceReply: normalizes existing list and quote markers and strips trailing colons", () => {
+  const out = buildTraceReply(["- already bulleted:\n* star too：\n1. numbered:\n> quote too", "summary"], "summary");
+  assert.equal(out, "##【执行过程】\n\n> already bulleted\n> star too\n> numbered\n> quote too\n\n---\n\nsummary");
 });
 
 test("buildTraceReply: drops the trailing block that duplicates the summary and filters blanks", () => {
-  const out = buildTraceReply(["step one", "   ", "final summary"], "final summary");
-  assert.equal(out, "**执行过程**\n\n- step one\n\n---\n\nfinal summary");
+  const out = buildTraceReply(["step one:", "   ", "final summary"], "final summary");
+  assert.equal(out, "##【执行过程】\n\n> step one\n\n---\n\nfinal summary");
 });
 
 // ── runTurn: aborted/timeout must notify (regression) ────────────────────────

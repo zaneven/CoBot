@@ -33,12 +33,15 @@ export class TodoPanel {
   private finished = false;
   private dirty = false;
   private timer?: ReturnType<typeof setTimeout>;
+  private heartbeat?: ReturnType<typeof setTimeout>;
   private chain: Promise<void> = Promise.resolve();
 
   constructor(
     private api: Api,
     private chatId: number,
     private flushMs = 900,
+    /** Re-render cadence for the elapsed-time ticker, independent of todo events. */
+    private heartbeatMs = 10_000,
   ) {}
 
   /** Whether any todo plan has been received yet. */
@@ -60,14 +63,21 @@ export class TodoPanel {
       this.timer = undefined;
       void this.flush();
     }, this.flushMs);
+    // UI refresh nicety only — must never hold the process open (the bot's
+    // lifecycle is owned by the gateway connection; finalize() always runs
+    // before the turn ends).
+    this.timer.unref?.();
   }
 
-  async flush(): Promise<void> {
+  async flush(force = false): Promise<void> {
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
-    if (!this.dirty) return;
+    if (!this.dirty && !force) {
+      this.armHeartbeat(); // keep the ticker alive even on no-op flushes
+      return;
+    }
     this.dirty = false;
     const text = this.render();
     await this.enqueue(async () => {
@@ -90,16 +100,34 @@ export class TodoPanel {
         }
       }
     });
+    this.armHeartbeat();
+  }
+
+  /**
+   * Keep the elapsed-time header ticking between todo events: re-render on a
+   * slow cadence even when nothing changed. Without this the panel freezes at
+   * the timestamp of its last update and looks stuck even while the run
+   * progresses. Stopped by {@link finalize}.
+   */
+  private armHeartbeat(): void {
+    if (this.heartbeat || this.finished || this.todos.length === 0) return;
+    this.heartbeat = setTimeout(() => {
+      this.heartbeat = undefined;
+      void this.flush(true);
+    }, this.heartbeatMs);
+    // Same as schedule(): never hold the process open for a re-render.
+    this.heartbeat.unref?.();
   }
 
   /** Stop tracking and pin the final state of the panel. */
   async finalize(): Promise<void> {
     if (this.finished) return;
     this.finished = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
+    for (const t of [this.timer, this.heartbeat]) {
+      if (t) clearTimeout(t);
     }
+    this.timer = undefined;
+    this.heartbeat = undefined;
     if (this.messageId === undefined) return; // never surfaced — nothing to pin
     this.dirty = true;
     await this.flush();

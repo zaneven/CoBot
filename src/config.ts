@@ -28,7 +28,17 @@ export interface ApprovalConfig {
 }
 
 /** Default read-only tools that skip the approval prompt. */
-export const DEFAULT_APPROVAL_SKIP_TOOLS = ["Read", "LS", "Glob", "Grep", "TodoWrite"];
+export const DEFAULT_APPROVAL_SKIP_TOOLS = [
+  "Read",
+  "LS",
+  "Glob",
+  "Grep",
+  "TodoWrite",
+  "TaskCreate",
+  "TaskUpdate",
+  "TaskList",
+  "TaskGet",
+];
 
 export interface AdminConfig {
   enabled: boolean;

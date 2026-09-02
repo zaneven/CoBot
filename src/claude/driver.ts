@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { query, type Options, type SDKMessage, type SDKUserMessage, type ModelUsage, type PermissionResult, type PermissionUpdate, type UserDialogResult as SdkUserDialogResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ContentBlockParam } from "@anthropic-ai/sdk/resources";
-import type { DriverEvent, RunParams, PromptInput, MediaAttachment, PermissionRequest, PermissionDecision, UserDialogRequest, UserDialogResult, TodoItem } from "./types.js";
+import type { DriverEvent, RunParams, PromptInput, MediaAttachment, PermissionRequest, PermissionDecision, UserDialogRequest, UserDialogResult, TodoItem, TodoStatus } from "./types.js";
 import { logger } from "../util/logger.js";
 
 /**
@@ -113,6 +113,8 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
   // tool_use_id -> tool name, so tool_result blocks can be labelled with the
   // tool that produced them.
   const toolNames = new Map<string, string>();
+  // Task tracker to track discrete TaskCreate/TaskUpdate and TodoWrite tool calls.
+  const taskTracker = new TaskTracker();
 
   try {
     const stream = query({ prompt: buildSdkPrompt(params.prompt), options });
@@ -170,13 +172,10 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
             } else if (block.type === "tool_use") {
               const name = block.name ?? "tool";
               if (block.id) toolNames.set(block.id, name);
-              // Surface the task-tracker plan: the model updates its todo list
-              // via TodoWrite, and each update carries the complete new list.
-              if (name === "TodoWrite") {
-                const todos = parseTodos(block.input);
-                if (todos) yield { kind: "todos", todos };
-              }
-              yield { kind: "tool", name, summary: summarizeToolInput(block.input) };
+              // Surface the task-tracker plan: handle TaskCreate, TaskUpdate, and TodoWrite
+              const todos = taskTracker.handleToolUse(name, block.input, block.id);
+              if (todos) yield { kind: "todos", todos };
+              yield { kind: "tool", name, summary: summarizeToolInput(name, block.input) };
               // A tool was used → the next incoming delta starts a new round.
               const r = shouldStartRound({ roundActive, pendingNewRound }, "tool");
               roundActive = r.roundActive;
@@ -196,6 +195,12 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
               const text = extractToolResultText(block.content).trim();
               if (!text && !isError) continue;
               const name = toolNames.get(block.tool_use_id) ?? "tool";
+              // Task tool results are the authority on real task ids/statuses —
+              // sync the tracker from them (see TaskTracker.handleToolResult).
+              if (!isError) {
+                const synced = taskTracker.handleToolResult(name, text, block.tool_use_id);
+                if (synced) yield { kind: "todos", todos: synced };
+              }
               yield { kind: "toolResult", name, content: text || "(error)", isError };
             }
           }
@@ -461,9 +466,18 @@ function mediaBlock(m: MediaAttachment): ContentBlockParam[] {
   return [{ type: "text", text: `📎 ${label}\n\`\`\`\n${truncated}\n\`\`\`` }];
 }
 
-function summarizeToolInput(input: unknown): string {
+function summarizeToolInput(name: string, input: unknown): string {
   if (input && typeof input === "object") {
     const o = input as Record<string, unknown>;
+    if (name === "TaskCreate") {
+      const title = (o.subject as string) || (o.description as string) || "";
+      return `创建任务: ${truncate(title, 80)}`;
+    }
+    if (name === "TaskUpdate") {
+      const taskId = o.taskId ?? o.id ?? "";
+      const status = (o.status as string) || "";
+      return `更新任务 #${taskId} ➔ ${status}`;
+    }
     if (Array.isArray(o.todos)) {
       const list = parseTodos(input);
       if (list) {
@@ -476,6 +490,193 @@ function summarizeToolInput(input: unknown): string {
     }
   }
   return truncate(JSON.stringify(input), 100);
+}
+
+/**
+ * In-memory task tracker that maintains the task list state across
+ * discrete TaskCreate, TaskUpdate, TaskGet/TaskList and batch TodoWrite tool calls.
+ */
+export class TaskTracker {
+  private tasks = new Map<string, TodoItem>();
+  private nextId = 1;
+  // tool_use_id -> the local key we assigned to the task created by that call.
+  // TaskCreate's tool_result carries the REAL store-assigned id; we re-key on
+  // result so later TaskUpdate calls (which use the real id) match.
+  private pendingCreates = new Map<string, string>();
+
+  /**
+   * Handle incoming tool calls related to tasks (TaskCreate, TaskUpdate, TodoWrite).
+   * Returns the updated TodoItem[] if the task list changed, or null if no change occurred.
+   */
+  handleToolUse(name: string, input: unknown, toolUseId?: string): TodoItem[] | null {
+    if (name === "TodoWrite") {
+      const items = parseTodos(input);
+      if (items) {
+        this.tasks.clear();
+        this.pendingCreates.clear();
+        this.nextId = 1;
+        for (const item of items) {
+          this.tasks.set(String(this.nextId++), item);
+        }
+        return items;
+      }
+      return null;
+    }
+
+    if (name === "TaskCreate" && input && typeof input === "object") {
+      const o = input as Record<string, unknown>;
+      const subject = typeof o.subject === "string" ? o.subject.trim() : "";
+      const description = typeof o.description === "string" ? o.description.trim() : "";
+      const content = subject || description;
+      if (!content) return null;
+
+      const activeForm = typeof o.activeForm === "string" && o.activeForm.trim() ? o.activeForm.trim() : undefined;
+      const status: TodoStatus = "pending";
+      const taskId = typeof o.taskId === "string" && o.taskId.trim()
+        ? o.taskId.trim()
+        : typeof o.taskId === "number"
+        ? String(o.taskId)
+        : String(this.nextId++);
+
+      this.tasks.set(taskId, {
+        content,
+        status,
+        ...(activeForm ? { activeForm } : {}),
+      });
+      if (toolUseId) this.pendingCreates.set(toolUseId, taskId);
+      return Array.from(this.tasks.values());
+    }
+
+    if (name === "TaskUpdate" && input && typeof input === "object") {
+      const o = input as Record<string, unknown>;
+      const rawId = o.taskId ?? o.id;
+      if (rawId === undefined || rawId === null) return null;
+      const taskId = String(rawId).trim();
+
+      const existing = this.tasks.get(taskId);
+      const rawStatus = typeof o.status === "string" ? o.status.trim() : "";
+
+      if (rawStatus === "deleted") {
+        if (existing) {
+          this.tasks.delete(taskId);
+          return Array.from(this.tasks.values());
+        }
+        return null;
+      }
+
+      const validStatus: TodoStatus | undefined =
+        rawStatus === "pending" || rawStatus === "in_progress" || rawStatus === "completed"
+          ? (rawStatus as TodoStatus)
+          : undefined;
+
+      const subject = typeof o.subject === "string" ? o.subject.trim() : "";
+      const description = typeof o.description === "string" ? o.description.trim() : "";
+      const activeForm = typeof o.activeForm === "string" && o.activeForm.trim() ? o.activeForm.trim() : undefined;
+
+      if (existing) {
+        // Only surface the list when something actually changed — a redundant
+        // TaskUpdate (e.g. metadata-only) would otherwise trigger a pointless
+        // Telegram edit that just hits "message is not modified".
+        let changed = false;
+        if (validStatus && existing.status !== validStatus) { existing.status = validStatus; changed = true; }
+        if ((subject || description) && existing.content !== (subject || description)) { existing.content = subject || description; changed = true; }
+        if (activeForm !== undefined && existing.activeForm !== activeForm) { existing.activeForm = activeForm; changed = true; }
+        return changed ? Array.from(this.tasks.values()) : null;
+      } else if (validStatus && (subject || description)) {
+        // Fallback for an update specifying a new task not seen in TaskCreate
+        this.tasks.set(taskId, {
+          content: subject || description,
+          status: validStatus,
+          ...(activeForm ? { activeForm } : {}),
+        });
+        return Array.from(this.tasks.values());
+      }
+      return null;
+    }
+
+    return null;
+  }
+
+  /**
+   * Sync tracker state from a tool RESULT (the model's task store is the
+   * authority, not our inference from tool inputs). Two jobs:
+   *  - TaskCreate results carry the store-assigned task id; re-key the locally
+   *    created entry so later TaskUpdate calls (which use that real id) match.
+   *    Without this, an id drift (e.g. a resumed session continues numbering)
+   *    makes every status-only TaskUpdate a silent no-op and the panel freezes.
+   *  - TaskList/TaskGet results carry the full authoritative snapshot; rebuild
+   *    from them wholesale.
+   * Returns the updated TodoItem[] when state changed, else null.
+   */
+  handleToolResult(name: string, text: string, toolUseId?: string): TodoItem[] | null {
+    if (!text) return null;
+
+    if (name === "TaskCreate") {
+      const out = parseJsonLoose(text);
+      const task = out && typeof out === "object" ? (out as { task?: { id?: unknown } }).task : undefined;
+      const realId = task && typeof task.id === "string" ? task.id.trim() : "";
+      if (!realId || !toolUseId) return null;
+      const oldKey = this.pendingCreates.get(toolUseId);
+      if (oldKey && oldKey !== realId && this.tasks.has(oldKey)) {
+        this.rekey(oldKey, realId);
+        this.pendingCreates.delete(toolUseId);
+        // Re-keying is bookkeeping only — the visible list is unchanged, so
+        // emit nothing (a redundant Telegram edit would just hit "not modified").
+        return null;
+      }
+      return null;
+    }
+
+    if (name === "TaskList") {
+      const out = parseJsonLoose(text);
+      const raw = out && typeof out === "object" ? (out as { tasks?: unknown }).tasks : undefined;
+      if (!Array.isArray(raw) || raw.length === 0) return null;
+      const items: TodoItem[] = [];
+      for (const e of raw) {
+        if (!e || typeof e !== "object") continue;
+        const t = e as { subject?: unknown; status?: unknown };
+        if (typeof t.subject !== "string" || !t.subject.trim()) continue;
+        if (t.status !== "pending" && t.status !== "in_progress" && t.status !== "completed") continue;
+        items.push({ content: t.subject, status: t.status });
+      }
+      if (items.length === 0) return null;
+      // Authoritative snapshot — only surface it when it differs from what we
+      // think, so repeated TaskList calls don't spam identical Telegram edits.
+      const prev = JSON.stringify(this.getTodos());
+      this.tasks.clear();
+      this.nextId = 1;
+      for (const item of items) this.tasks.set(String(this.nextId++), item);
+      return JSON.stringify(this.getTodos()) === prev ? null : Array.from(this.tasks.values());
+    }
+
+    if (name === "TaskGet") {
+      const out = parseJsonLoose(text);
+      const task = out && typeof out === "object" ? (out as { task?: { subject?: unknown; status?: unknown } }).task : undefined;
+      if (!task || typeof task.subject !== "string" || !task.subject.trim()) return null;
+      if (task.status !== "pending" && task.status !== "in_progress" && task.status !== "completed") return null;
+      const content = task.subject;
+      const existing = [...this.tasks.values()].find((t) => t.content === content);
+      if (existing && existing.status !== task.status) {
+        existing.status = task.status;
+        return Array.from(this.tasks.values());
+      }
+      return null;
+    }
+
+    return null;
+  }
+
+  /** Replace a task's key while preserving list order. */
+  private rekey(oldKey: string, newKey: string): void {
+    if (oldKey === newKey) return;
+    const rebuilt = new Map<string, TodoItem>();
+    for (const [k, v] of this.tasks) rebuilt.set(k === oldKey ? newKey : k, v);
+    this.tasks = rebuilt;
+  }
+
+  getTodos(): TodoItem[] {
+    return Array.from(this.tasks.values());
+  }
 }
 
 /**
@@ -503,6 +704,20 @@ export function parseTodos(input: unknown): TodoItem[] | null {
     });
   }
   return items;
+}
+
+/**
+ * Parse a tool-result payload as JSON, tolerating the non-JSON prose/fence
+ * wrappers the CLI sometimes emits around structured outputs. Returns null
+ * when nothing parseable is found.
+ */
+function parseJsonLoose(text: string): unknown {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
 }
 
 function truncate(s: string, n: number): string {

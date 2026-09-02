@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { PromptInput } from "./types.js";
-import { buildSdkPrompt, parseContextFromModelId, computeContextUsagePct, mapContentBlockDelta, buildPermissionRequest, toSdkPermissionResult, shouldStartRound, isMaxTurnsResult, parseTodos } from "./driver.js";
+import { buildSdkPrompt, parseContextFromModelId, computeContextUsagePct, mapContentBlockDelta, buildPermissionRequest, toSdkPermissionResult, shouldStartRound, isMaxTurnsResult, parseTodos, TaskTracker } from "./driver.js";
 import type { ModelUsage } from "@anthropic-ai/claude-agent-sdk";
 
 type Block = { type: string; text?: string; source?: { type: string; media_type: string; data: string } };
@@ -323,4 +323,143 @@ test("mapContentBlockDelta: sequences thinking then text across multiple deltas"
     { kind: "thinking", delta: "let me think" },
     { kind: "text", delta: "answer" },
   ]);
+});
+
+// ─── TaskTracker: TaskCreate / TaskUpdate / TodoWrite ────────────────────
+
+test("TaskTracker: TaskCreate creates pending tasks with auto-increment id", () => {
+  const tracker = new TaskTracker();
+  const t1 = tracker.handleToolUse("TaskCreate", { subject: "Task 1", activeForm: "Doing task 1" });
+  assert.deepEqual(t1, [
+    { content: "Task 1", status: "pending", activeForm: "Doing task 1" },
+  ]);
+
+  const t2 = tracker.handleToolUse("TaskCreate", { description: "Task 2" });
+  assert.deepEqual(t2, [
+    { content: "Task 1", status: "pending", activeForm: "Doing task 1" },
+    { content: "Task 2", status: "pending" },
+  ]);
+});
+
+test("TaskTracker: TaskUpdate updates task status and content", () => {
+  const tracker = new TaskTracker();
+  tracker.handleToolUse("TaskCreate", { subject: "First task" });
+  tracker.handleToolUse("TaskCreate", { subject: "Second task" });
+
+  const u1 = tracker.handleToolUse("TaskUpdate", { taskId: "1", status: "in_progress" });
+  assert.deepEqual(u1, [
+    { content: "First task", status: "in_progress" },
+    { content: "Second task", status: "pending" },
+  ]);
+
+  const u2 = tracker.handleToolUse("TaskUpdate", { taskId: 2, status: "completed" });
+  assert.deepEqual(u2, [
+    { content: "First task", status: "in_progress" },
+    { content: "Second task", status: "completed" },
+  ]);
+});
+
+test("TaskTracker: TaskUpdate handles deletion", () => {
+  const tracker = new TaskTracker();
+  tracker.handleToolUse("TaskCreate", { subject: "Task 1" });
+  tracker.handleToolUse("TaskCreate", { subject: "Task 2" });
+
+  const del = tracker.handleToolUse("TaskUpdate", { taskId: "1", status: "deleted" });
+  assert.deepEqual(del, [
+    { content: "Task 2", status: "pending" },
+  ]);
+});
+
+test("TaskTracker: TodoWrite replaces the entire list", () => {
+  const tracker = new TaskTracker();
+  tracker.handleToolUse("TaskCreate", { subject: "Old task" });
+
+  const batch = tracker.handleToolUse("TodoWrite", {
+    todos: [
+      { content: "New batch task 1", status: "completed" },
+      { content: "New batch task 2", status: "in_progress" },
+    ],
+  });
+  assert.deepEqual(batch, [
+    { content: "New batch task 1", status: "completed" },
+    { content: "New batch task 2", status: "in_progress" },
+  ]);
+});
+
+test("TaskTracker: ignores unrelated tools or invalid inputs", () => {
+  const tracker = new TaskTracker();
+  assert.equal(tracker.handleToolUse("Bash", { command: "ls" }), null);
+  assert.equal(tracker.handleToolUse("TaskCreate", {}), null);
+  assert.equal(tracker.handleToolUse("TaskUpdate", {}), null);
+});
+test("TaskTracker: TaskCreate tool_result re-keys to the real store id", () => {
+  const tracker = new TaskTracker();
+  // Model creates tasks; the store assigns ids that differ from our local ones
+  // (e.g. a resumed session continues numbering from 7).
+  tracker.handleToolUse("TaskCreate", { subject: "任务一" }, "tu_1");
+  tracker.handleToolUse("TaskCreate", { subject: "任务二" }, "tu_2");
+
+  // Local keys were 1/2, but the store says the real ids are 7/8.
+  assert.equal(tracker.handleToolResult("TaskCreate", '{"task":{"id":"7","subject":"任务一"}}', "tu_1"), null,
+    "re-keying alone does not change visible state");
+  assert.equal(tracker.handleToolResult("TaskCreate", '{"task":{"id":"8","subject":"任务二"}}', "tu_2"), null);
+
+  // A status-only TaskUpdate using the REAL id must now hit the right task.
+  const u = tracker.handleToolUse("TaskUpdate", { taskId: "7", status: "in_progress" });
+  assert.deepEqual(u, [
+    { content: "任务一", status: "in_progress" },
+    { content: "任务二", status: "pending" },
+  ]);
+});
+
+test("TaskTracker: redundant TaskUpdate emits nothing (no list change)", () => {
+  const tracker = new TaskTracker();
+  tracker.handleToolUse("TaskCreate", { subject: "Task A", activeForm: "Doing A" }, "tu_1");
+  assert.notEqual(tracker.handleToolUse("TaskUpdate", { taskId: "1", status: "in_progress" }), null);
+  assert.equal(tracker.handleToolUse("TaskUpdate", { taskId: "1", status: "in_progress" }), null,
+    "second identical update is a no-op");
+  assert.equal(tracker.handleToolUse("TaskUpdate", { taskId: "1", activeForm: "Doing A" }), null,
+    "same activeForm is a no-op");
+});
+
+test("TaskTracker: TaskList tool_result is the authoritative snapshot", () => {
+  const tracker = new TaskTracker();
+  tracker.handleToolUse("TaskCreate", { subject: "Stale task" }, "tu_1");
+  tracker.handleToolUse("TaskCreate", { subject: "Other" }, "tu_2");
+
+  const synced = tracker.handleToolResult("TaskList", JSON.stringify({
+    tasks: [
+      { id: "5", subject: "Stale task", status: "in_progress", blockedBy: [] },
+      { id: "6", subject: "Other", status: "completed", blockedBy: [] },
+    ],
+  }));
+  assert.deepEqual(synced, [
+    { content: "Stale task", status: "in_progress" },
+    { content: "Other", status: "completed" },
+  ]);
+
+  // An unchanged snapshot emits nothing (no duplicate Telegram edits).
+  const again = tracker.handleToolResult("TaskList", JSON.stringify({
+    tasks: [
+      { id: "5", subject: "Stale task", status: "in_progress", blockedBy: [] },
+      { id: "6", subject: "Other", status: "completed", blockedBy: [] },
+    ],
+  }));
+  assert.equal(again, null);
+});
+
+test("TaskTracker: TaskGet tool_result updates a matching task's status", () => {
+  const tracker = new TaskTracker();
+  tracker.handleToolUse("TaskCreate", { subject: "Only task" }, "tu_1");
+  const u = tracker.handleToolResult("TaskGet", '{"task":{"id":"9","subject":"Only task","status":"completed","blocks":[],"blockedBy":[]}}', "tg_1");
+  assert.deepEqual(u, [{ content: "Only task", status: "completed" }]);
+  assert.equal(tracker.handleToolResult("TaskGet", '{"task":{"id":"9","subject":"Only task","status":"completed","blocks":[],"blockedBy":[]}}', "tg_2"), null);
+});
+
+test("TaskTracker: non-JSON task results are ignored safely", () => {
+  const tracker = new TaskTracker();
+  tracker.handleToolUse("TaskCreate", { subject: "Task A" }, "tu_1");
+  assert.equal(tracker.handleToolResult("TaskCreate", "Task created successfully", "tu_1"), null);
+  assert.equal(tracker.handleToolResult("TaskList", "no tasks found", ""), null);
+  assert.deepEqual(tracker.getTodos(), [{ content: "Task A", status: "pending" }]);
 });

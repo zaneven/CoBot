@@ -77,19 +77,39 @@ export function runBotCtl(
       stdio,
       env,
     });
-    child.unref();
     let out = "";
     if (!selfKill) {
       child.stdout?.on("data", (d: Buffer) => (out += d.toString()));
       child.stderr?.on("data", (d: Buffer) => (out += d.toString()));
     }
+    // Only the selfKill actions are detached-and-unref'd (their script must
+    // survive this process being SIGTERM'd). start/install keep a normal
+    // handle: the caller awaits their result, and an unref'd child lets the
+    // event loop drain before 'exit' ever fires — which left the promise
+    // pending forever ("Promise resolution is still pending") in tests.
+    let keepAlive: NodeJS.Timeout | undefined;
+    const clearKeepAlive = () => {
+      if (keepAlive) {
+        clearTimeout(keepAlive);
+        keepAlive = undefined;
+      }
+    };
+    if (selfKill) {
+      child.unref();
+      // Hold the loop open until the child reports back so the promise below
+      // can actually settle. SIGTERM kills the process regardless of held
+      // handles, so this doesn't interfere with the script stopping us.
+      keepAlive = setTimeout(() => {}, 2 ** 31 - 1);
+    }
     child.on("error", (err) => {
+      clearKeepAlive();
       if (fd !== null) {
         try { closeSync(fd); } catch { /* already closed */ }
       }
       resolveResult({ ok: false, code: null, output: out + `\n[spawn error] ${err.message}` });
     });
     child.on("exit", (code) => {
+      clearKeepAlive();
       if (fd !== null) {
         try { closeSync(fd); } catch { /* already closed */ }
       }

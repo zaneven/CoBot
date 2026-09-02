@@ -93,3 +93,30 @@ test("TodoPanel finalize is a no-op when no plan was ever received", async () =>
   assert.equal(api.sent.length, 0);
   assert.equal(api.edited.length, 0);
 });
+
+test("TodoPanel heartbeat re-renders the elapsed time between todo events", async () => {
+  const api = makeStubApi();
+  const panel = new TodoPanel(api, 12345, 0, 10);
+  panel.update([todo("task A", "in_progress")]);
+  await panel.flush();
+  assert.equal(api.edited.length, 0);
+
+  // No todo events arrive; the heartbeat alone should keep editing the message
+  // so the elapsed-time header keeps ticking.
+  await new Promise((r) => setTimeout(r, 60));
+  assert.ok(api.edited.length >= 2, `heartbeat edits happened (got ${api.edited.length})`);
+
+  await panel.finalize();
+  const afterFinalize = api.edited.length;
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(api.edited.length, afterFinalize, "finalize stops the heartbeat");
+});
+
+test("TodoPanel heartbeat never fires before a plan exists", async () => {
+  const api = makeStubApi();
+  const panel = new TodoPanel(api, 12345, 0, 5);
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(api.sent.length, 0);
+  assert.equal(api.edited.length, 0);
+  await panel.finalize();
+});

@@ -26,7 +26,7 @@ approval:
   mode: auto # auto = headless auto-approve; interactive = prompt for mutating tools
   timeoutMs: 300000 # per-request approval timeout (must be < taskTimeoutMs)
   timeoutAction: allow # decision when the user doesn't respond: allow | deny
-  skipTools: [Read, LS, Glob, Grep, TodoWrite] # never prompt for these (read-only)
+  skipTools: [Read, LS, Glob, Grep, TodoWrite, TaskCreate, TaskUpdate, TaskList, TaskGet] # never prompt for these (read-only)
 
 # Defaults applied to every Claude run unless overridden by env / a /run flag.
 defaults:

@@ -25,7 +25,7 @@ import { buildNextActions, renderSuggestionKeyboard, extractNextActions, NEXT_AC
  */
 const FORMAT_DIRECTIVE = `
 
-[排版] 当你的回答较长（包含多个段落或多个要点）时，请注意排版以提升可读性：用空行分隔不同段落，避免大段文字堆叠在一起；用 **加粗** 作为小节标题；在主要章节之间用单独一行的 --- 分隔。简短的回答或纯代码/命令输出无需强行套用此结构。`;
+[排版] 请使用 markdown 格式回复`;
 
 export function isRetryableError(text: string): boolean {
   if (!text) return false;
@@ -224,7 +224,7 @@ export async function runTurn(opts: {
   function renderLiveTrace(): string {
     const lists = traceTexts.map((t) => toBulletList(t.trim())).filter(Boolean);
     if (lists.length === 0) return "";
-    return `**执行过程**\n\n${lists.join("\n\n---\n\n")}`;
+    return `##【执行过程】\n\n${lists.join("\n\n---\n\n")}`;
   }
   // Push the current live-trace body into the streamer (throttled/deferred
   // internally), so each tool boundary re-renders the growing bullet list. A
@@ -755,22 +755,22 @@ export function buildTraceReply(texts: string[], summary: string): string {
     .map((t) => toBulletList(t.trim()))
     .filter(Boolean);
   if (lists.length === 0) return s;
-  return `**执行过程**\n\n${lists.join("\n\n---\n\n")}\n\n---\n\n${s}`;
+  return `##【执行过程】\n\n${lists.join("\n\n---\n\n")}\n\n---\n\n${s}`;
 }
 
 /**
- * Render one narration block as a Markdown unordered list: one bullet per
- * non-blank line. Existing list markers ("- ", "* ", "1. ") are stripped first
- * so we never emit double bullets, and plain prose lines just gain a "- "
- * prefix. Blank lines collapse so the list stays tight.
+ * Render one narration block as a Markdown blockquote: prefix each non-blank line
+ * with "> ". Existing list/quote markers ("- ", "* ", "1. ", "> ") and trailing
+ * colons (":", "：") are stripped first. Blank lines collapse so the block stays tight.
  */
 function toBulletList(text: string): string {
   return text
     .split(/\n+/)
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => l.replace(/^[-*+]\s+|^\d+\.\s+/, "").trim())
-    .map((l) => `- ${l}`)
+    .map((l) => l.replace(/^[-*+>]\s+|^\d+[.)]\s*/, "").replace(/[:：]\s*$/, "").trim())
+    .filter(Boolean)
+    .map((l) => `> ${l}`)
     .join("\n");
 }
 
