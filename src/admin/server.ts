@@ -339,6 +339,8 @@ export class AdminServer {
         startedAt: r.startedAt,
         sessionId: r.sessionId || null,
         displayText: r.displayText,
+        engine: r.engine || null,
+        model: r.model || null,
         queueLength: this.registry.queueLength(r.chatId),
         narration: this.registry.liveNarration(r.taskId),
       }));

@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../store/db.js";
 import { Registry } from "../registry/registry.js";
-import { submitInteractive, runTurn, shouldSendFinalAnswer, buildTraceReply, isRetryableError, isCorruptedResumeError } from "./runs.js";
+import { submitInteractive, runTurn, runOne, resolveEngineModel, shouldSendFinalAnswer, buildTraceReply, isRetryableError, isCorruptedResumeError } from "./runs.js";
 import type { Config } from "../config.js";
 import type { PromptInput, DriverEvent } from "../claude/types.js";
 
@@ -248,4 +248,70 @@ test("runTurn: user abort (done{aborted,user}) settles the dashboard too", async
   assert.equal(outcome.status, "aborted");
   const settled = api.messages.some((m) => m.includes("任务已中断") && m.includes("用户中断"));
   assert.ok(settled, `expected a user-abort settlement card, got: ${JSON.stringify(api.messages)}`);
+});
+
+// ── engine/model surfacing ──〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
+
+test("resolveEngineModel: chat overrides win, else config defaults", () => {
+  const cfg = { ...MINIMAL_CONFIG, backend: "claude" } as Config;
+  store.upsertBinding(CHAT, "/p", null);
+  // No overrides → config defaults (model undefined = CLI default).
+  assert.deepEqual(resolveEngineModel(store, cfg, CHAT), { engine: "claude", model: undefined });
+
+  store.setEngine(CHAT, "opencode");
+  store.setModel(CHAT, "gpt-5");
+  assert.deepEqual(resolveEngineModel(store, cfg, CHAT), { engine: "opencode", model: "gpt-5" });
+});
+
+test("runTurn: captures the driver's resolved model into the outcome and settlement card", async () => {
+  store.upsertBinding(CHAT, "/p", null);
+  const fakeDriver = async function* (): AsyncGenerator<DriverEvent> {
+    yield { kind: "init", sessionId: "s9", cwd: "/p", model: "claude-sonnet-4-5" };
+    yield { kind: "done", text: "ok", isError: false, aborted: false };
+  };
+  const outcome = await runTurn({
+    api: api as unknown as import("grammy").Api,
+    chatId: CHAT,
+    projectPath: "/p",
+    sessionId: null,
+    prompt: PROMPT,
+    config: MINIMAL_CONFIG,
+    registry,
+    store,
+    origin: "interactive",
+    abortSignal: new AbortController().signal,
+    runClaudeFn: fakeDriver,
+  });
+  assert.equal(outcome.model, "claude-sonnet-4-5");
+  // The settlement card names the engine and model.
+  const card = api.messages.find((m) => m.includes("任务执行完成"));
+  assert.ok(card, "expected a settlement card");
+  assert.ok(card.includes("模型"), `expected engine/model line on the card: ${card}`);
+});
+
+test("runOne: persists engine and model onto the audit log", async () => {
+  store.upsertBinding(CHAT, "/p", null);
+  store.setEngine(CHAT, "opencode");
+  store.setModel(CHAT, "gpt-5");
+  const fakeDriver = async function* (): AsyncGenerator<DriverEvent> {
+    yield { kind: "init", sessionId: "s10", cwd: "/p", model: "gpt-5" };
+    yield { kind: "done", text: "done", isError: false, aborted: false };
+  };
+  await runOne({
+    api: api as unknown as import("grammy").Api,
+    chatId: CHAT,
+    projectPath: "/p",
+    sessionId: null,
+    prompt: PROMPT,
+    displayText: "engine test",
+    config: MINIMAL_CONFIG,
+    registry,
+    store,
+    origin: "interactive",
+    runClaudeFn: fakeDriver,
+  });
+  const logs = store.listAudit(CHAT);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0]!.engine, "opencode");
+  assert.equal(logs[0]!.model, "gpt-5");
 });

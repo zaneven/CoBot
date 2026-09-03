@@ -454,3 +454,96 @@ test("insertTraceEvents falls back to batch-insert time when createdAt is absent
   assert.ok(first.createdAt >= before && first.createdAt <= Date.now() + 1);
   assert.equal(first.createdAt, second.createdAt);
 });
+// ── audit engine/model + backfill ──〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰〰
+
+function auditSample(overrides: Partial<import("./db.js").AuditLog> = {}): import("./db.js").AuditLog {
+  return {
+    id: "a-" + Math.random().toString(36).slice(2),
+    chatId: 7,
+    sessionId: null,
+    prompt: "p",
+    tools: "[]",
+    status: "done",
+    costUsd: 0.5,
+    durationMs: 1000,
+    inputTokens: 100,
+    outputTokens: 50,
+    contextUsagePct: null,
+    engine: "claude",
+    model: "claude-sonnet-4-5",
+    startedAt: Date.now(),
+    endedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+test("audit readers return engine and model, including getAuditLogById", () => {
+  store.insertAudit(auditSample({ id: "am-1" }));
+  const row = store.listAudit(7)[0]!;
+  assert.equal(row.engine, "claude");
+  assert.equal(row.model, "claude-sonnet-4-5");
+  const byId = store.getAuditLogById("am-1");
+  assert.ok(byId);
+  assert.equal(byId!.engine, "claude", "getAuditLogById must map engine");
+  assert.equal(byId!.model, "claude-sonnet-4-5");
+  const all = store.listAllAuditLogs(10, 0).logs[0]!;
+  assert.equal(all.engine, "claude");
+  assert.equal(all.model, "claude-sonnet-4-5");
+});
+
+test("backfillAuditDefaults stamps pre-multi-engine rows and is idempotent", () => {
+  store.insertAudit(auditSample({ id: "old-1", engine: null, model: null }));
+  store.insertAudit(auditSample({ id: "new-1", engine: "opencode", model: "gpt-5" }));
+  store.insertTask({
+    id: "task-old", chatId: 7, projectPath: "/p", sessionId: null, prompt: "p",
+    status: "aborted", engine: null, model: null, startedAt: Date.now(), endedAt: Date.now(),
+  });
+
+  store.backfillAuditDefaults("claude", "sonnet-default");
+
+  const old = store.getAuditLogById("old-1")!;
+  assert.equal(old.engine, "claude");
+  assert.equal(old.model, "sonnet-default");
+  // Rows that already carry an engine are untouched.
+  const known = store.getAuditLogById("new-1")!;
+  assert.equal(known.engine, "opencode");
+  assert.equal(known.model, "gpt-5");
+  const task = store.listTasks(7)[0]!;
+  assert.equal(task.engine, "claude");
+  assert.equal(task.model, "sonnet-default");
+
+  // Running again must not overwrite real per-run values with new defaults.
+  store.backfillAuditDefaults("opencode", "gpt-9");
+  assert.equal(store.getAuditLogById("old-1")!.engine, "claude");
+  assert.equal(store.getAuditLogById("old-1")!.model, "sonnet-default");
+});
+
+test("backfillAuditDefaults without a configured model leaves model NULL", () => {
+  store.insertAudit(auditSample({ id: "old-2", engine: null, model: null }));
+  store.backfillAuditDefaults("claude");
+  const row = store.getAuditLogById("old-2")!;
+  assert.equal(row.engine, "claude");
+  assert.equal(row.model, null);
+});
+
+test("getAuditStats breaks usage down by engine and model", () => {
+  store.insertAudit(auditSample({ id: "s-1", engine: "claude", model: "sonnet", costUsd: 1, inputTokens: 100, outputTokens: 100 }));
+  store.insertAudit(auditSample({ id: "s-2", engine: "claude", model: "opus", costUsd: 2, inputTokens: 10, outputTokens: 10 }));
+  store.insertAudit(auditSample({ id: "s-3", engine: "opencode", model: "gpt-5", costUsd: 4, inputTokens: 5, outputTokens: 5 }));
+  store.insertAudit(auditSample({ id: "s-4", engine: null, model: null })); // pre-multi-engine row
+
+  const stats = store.getAuditStats(0);
+  assert.equal(stats.totalTasks, 4);
+
+  const engines = Object.fromEntries(stats.byEngine.map((e) => [e.key, e]));
+  // claude bucket = the two real claude rows + the NULL-engine history row.
+  assert.equal(engines["claude"]!.tasks, 3, "NULL-engine history rolls into the default engine bucket");
+  assert.equal(engines["claude"]!.costUsd, 3.5);
+  assert.equal(engines["opencode"]!.tasks, 1);
+  assert.equal(engines["opencode"]!.tokens, 10);
+
+  const models = Object.fromEntries(stats.byModel.map((m) => [m.key, m]));
+  assert.equal(models["sonnet"]!.tasks, 1);
+  assert.equal(models["gpt-5"]!.tasks, 1);
+  assert.equal(models["default"]!.tasks, 1, "NULL-model history rolls into the default bucket");
+});

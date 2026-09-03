@@ -412,14 +412,14 @@ export async function handleTasks(ctx: Context, store: Store, registry: Registry
   if (active.length) {
     lines.push(`Active (${projectPath ? projectPath.split("/").pop() : "all"}):`);
     for (const r of active) {
-      lines.push(`▶️ ${r.sessionId ? r.sessionId.slice(0, 8) : "fresh"} · ${relTime(r.startedAt)}`);
+      lines.push(`▶️ ${r.sessionId ? r.sessionId.slice(0, 8) : "fresh"} · ${r.engine ?? "claude"} · ${relTime(r.startedAt)}`);
     }
   }
   if (recent.length) {
     lines.push(`Recent${projectPath ? ` (${projectPath.split("/").pop()})` : ""}:`);
     for (const t of recent) {
       const projLabel = projectPath ? "" : ` · ${t.projectPath.split("/").pop()}`;
-      lines.push(`${emoji[t.status] ?? "•"} ${t.status} · ${truncate(t.prompt, 50)}${projLabel} · ${relTime(t.startedAt)}`);
+      lines.push(`${emoji[t.status] ?? "•"} ${t.status} · ${truncate(t.prompt, 50)}${projLabel} · ${t.engine ?? "claude"} · ${relTime(t.startedAt)}`);
     }
   }
   if (!active.length && !recent.length) {

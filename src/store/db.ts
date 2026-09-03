@@ -32,6 +32,10 @@ export interface RunningTask {
   sessionId: string | null;
   prompt: string;
   status: "running" | "done" | "aborted" | "error";
+  /** Engine backend the task was dispatched to (null = pre-multi-engine row). */
+  engine?: string | null;
+  /** Model id the task ran with (null = engine CLI's own default). */
+  model?: string | null;
   startedAt: number;
   endedAt: number | null;
 }
@@ -97,6 +101,8 @@ export interface AuditLog {
   outputTokens: number | null;
   contextUsagePct: number | null;
   engine?: string | null;
+  /** Model id the task actually ran with (null = engine CLI's own default). */
+  model?: string | null;
   startedAt: number;
   endedAt: number | null;
 }
@@ -119,6 +125,8 @@ CREATE TABLE IF NOT EXISTS running_tasks (
   session_id   TEXT,
   prompt       TEXT NOT NULL,
   status       TEXT NOT NULL,
+  engine       TEXT,
+  model        TEXT,
   started_at   INTEGER NOT NULL,
   ended_at     INTEGER
 );
@@ -160,6 +168,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   output_tokens INTEGER,
   context_usage_pct REAL,
   engine       TEXT,
+  model        TEXT,
   started_at   INTEGER NOT NULL,
   ended_at     INTEGER
 );
@@ -206,6 +215,16 @@ function migrate(db: DB): void {
   const auditCols = db.prepare("PRAGMA table_info(audit_logs)").all() as { name: string }[];
   if (!auditCols.some((c) => c.name === "engine")) {
     db.exec("ALTER TABLE audit_logs ADD COLUMN engine TEXT");
+  }
+  if (!auditCols.some((c) => c.name === "model")) {
+    db.exec("ALTER TABLE audit_logs ADD COLUMN model TEXT");
+  }
+  const taskCols = db.prepare("PRAGMA table_info(running_tasks)").all() as { name: string }[];
+  if (!taskCols.some((c) => c.name === "engine")) {
+    db.exec("ALTER TABLE running_tasks ADD COLUMN engine TEXT");
+  }
+  if (!taskCols.some((c) => c.name === "model")) {
+    db.exec("ALTER TABLE running_tasks ADD COLUMN model TEXT");
   }
   const tableNames = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
   if (!tableNames.some((t) => t.name === "trace_events")) {
@@ -295,10 +314,10 @@ export class Store {
   insertTask(t: RunningTask): void {
     this.db
       .prepare(
-        `INSERT INTO running_tasks (id, chat_id, project_path, session_id, prompt, status, started_at, ended_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO running_tasks (id, chat_id, project_path, session_id, prompt, status, engine, model, started_at, ended_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(t.id, t.chatId, t.projectPath, t.sessionId, t.prompt, t.status, t.startedAt, t.endedAt);
+      .run(t.id, t.chatId, t.projectPath, t.sessionId, t.prompt, t.status, t.engine ?? null, t.model ?? null, t.startedAt, t.endedAt);
   }
 
   updateTaskStatus(id: string, status: RunningTask["status"], endedAt: number | null): void {
@@ -327,6 +346,8 @@ export class Store {
       sessionId: (r.session_id as string | null) ?? null,
       prompt: r.prompt as string,
       status: r.status as RunningTask["status"],
+      engine: (r.engine as string | null) ?? null,
+      model: (r.model as string | null) ?? null,
       startedAt: r.started_at as number,
       endedAt: (r.ended_at as number | null) ?? null,
     };
@@ -579,8 +600,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO audit_logs
-           (id, chat_id, session_id, prompt, tools, status, cost_usd, duration_ms, input_tokens, output_tokens, context_usage_pct, engine, started_at, ended_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, chat_id, session_id, prompt, tools, status, cost_usd, duration_ms, input_tokens, output_tokens, context_usage_pct, engine, model, started_at, ended_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         log.id,
@@ -595,6 +616,7 @@ export class Store {
         log.outputTokens,
         log.contextUsagePct,
         log.engine ?? null,
+        log.model ?? null,
         log.startedAt,
         log.endedAt,
       );
@@ -620,11 +642,9 @@ export class Store {
     return r.s;
   }
 
-  listAudit(chatId: number, limit = 20): AuditLog[] {
-    const rows = this.db
-      .prepare("SELECT * FROM audit_logs WHERE chat_id = ? ORDER BY started_at DESC LIMIT ?")
-      .all(chatId, limit) as Record<string, unknown>[];
-    return rows.map((r) => ({
+  /** Map a raw audit_logs row to an {@link AuditLog}. Shared by all audit readers. */
+  private mapAudit(r: Record<string, unknown>): AuditLog {
+    return {
       id: r.id as string,
       chatId: r.chat_id as number,
       sessionId: (r.session_id as string | null) ?? null,
@@ -637,9 +657,17 @@ export class Store {
       outputTokens: (r.output_tokens as number | null) ?? null,
       contextUsagePct: (r.context_usage_pct as number | null) ?? null,
       engine: (r.engine as string | null) ?? null,
+      model: (r.model as string | null) ?? null,
       startedAt: r.started_at as number,
       endedAt: (r.ended_at as number | null) ?? null,
-    }));
+    };
+  }
+
+  listAudit(chatId: number, limit = 20): AuditLog[] {
+    const rows = this.db
+      .prepare("SELECT * FROM audit_logs WHERE chat_id = ? ORDER BY started_at DESC LIMIT ?")
+      .all(chatId, limit) as Record<string, unknown>[];
+    return rows.map((r) => this.mapAudit(r));
   }
 
   // ---- approval rules (long-term "always allow") ----
@@ -695,22 +723,7 @@ export class Store {
     const rows = this.db
       .prepare("SELECT * FROM audit_logs ORDER BY started_at DESC LIMIT ? OFFSET ?")
       .all(limit, offset) as Record<string, unknown>[];
-    const logs = rows.map((r) => ({
-      id: r.id as string,
-      chatId: r.chat_id as number,
-      sessionId: (r.session_id as string | null) ?? null,
-      prompt: r.prompt as string,
-      tools: (r.tools as string) ?? "[]",
-      status: r.status as AuditLog["status"],
-      costUsd: (r.cost_usd as number | null) ?? null,
-      durationMs: (r.duration_ms as number | null) ?? null,
-      inputTokens: (r.input_tokens as number | null) ?? null,
-      outputTokens: (r.output_tokens as number | null) ?? null,
-      contextUsagePct: (r.context_usage_pct as number | null) ?? null,
-      engine: (r.engine as string | null) ?? null,
-      startedAt: r.started_at as number,
-      endedAt: (r.ended_at as number | null) ?? null,
-    }));
+    const logs = rows.map((r) => this.mapAudit(r));
     return { logs, total: countRow.c };
   }
 
@@ -725,6 +738,46 @@ export class Store {
     }));
   }
 
+  /** Usage broken down by one audit dimension (engine or model). Rows with a
+   *  NULL dimension (pre-multi-engine history) roll into `fallbackLabel`. */
+  private getAuditBreakdown(column: "engine" | "model", fallbackLabel: string, sinceTs: number, limit = 8): Array<{ key: string; tasks: number; costUsd: number; tokens: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT
+           ${column} AS rawKey,
+           COUNT(*) AS tasks,
+           COALESCE(SUM(cost_usd), 0) AS costUsd,
+           COALESCE(SUM(input_tokens + output_tokens), 0) AS tokens
+         FROM audit_logs
+         WHERE started_at >= ?
+         GROUP BY ${column}
+         ORDER BY tasks DESC
+         LIMIT ?`,
+      )
+      .all(sinceTs, limit) as Array<Record<string, unknown>>;
+    // Map NULL (pre-multi-engine history) to the fallback label AFTER grouping
+    // and merge it with any real rows that share the fallback value.
+    const merged = new Map<string, { key: string; tasks: number; costUsd: number; tokens: number }>();
+    for (const r of rows) {
+      const key = (r.rawKey as string | null) ?? fallbackLabel;
+      const cur = merged.get(key);
+      if (cur) {
+        cur.tasks += Number(r.tasks || 0);
+        cur.costUsd += Number(r.costUsd || 0);
+        cur.tokens += Number(r.tokens || 0);
+      } else {
+        merged.set(key, { key, tasks: Number(r.tasks || 0), costUsd: Number(r.costUsd || 0), tokens: Number(r.tokens || 0) });
+      }
+    }
+    return [...merged.values()].sort((a, b) => b.tasks - a.tasks);
+    return rows.map((r) => ({
+      key: String(r.key),
+      tasks: Number(r.tasks || 0),
+      costUsd: Number(r.costUsd || 0),
+      tokens: Number(r.tokens || 0),
+    }));
+  }
+
   getAuditStats(sinceTs = 0): {
     totalTasks: number;
     doneTasks: number;
@@ -732,6 +785,8 @@ export class Store {
     abortedTasks: number;
     totalCostUsd: number;
     totalTokens: number;
+    byEngine: Array<{ key: string; tasks: number; costUsd: number; tokens: number }>;
+    byModel: Array<{ key: string; tasks: number; costUsd: number; tokens: number }>;
   } {
     const row = this.db
       .prepare(
@@ -753,27 +808,15 @@ export class Store {
       abortedTasks: row.abortedTasks || 0,
       totalCostUsd: row.totalCostUsd || 0,
       totalTokens: row.totalTokens || 0,
+      byEngine: this.getAuditBreakdown("engine", "claude", sinceTs),
+      byModel: this.getAuditBreakdown("model", "default", sinceTs),
     };
   }
 
   getAuditLogById(id: string): AuditLog | undefined {
     const r = this.db.prepare("SELECT * FROM audit_logs WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     if (!r) return undefined;
-    return {
-      id: r.id as string,
-      chatId: r.chat_id as number,
-      sessionId: (r.session_id as string | null) ?? null,
-      prompt: r.prompt as string,
-      tools: (r.tools as string) ?? "[]",
-      status: r.status as AuditLog["status"],
-      costUsd: (r.cost_usd as number | null) ?? null,
-      durationMs: (r.duration_ms as number | null) ?? null,
-      inputTokens: (r.input_tokens as number | null) ?? null,
-      outputTokens: (r.output_tokens as number | null) ?? null,
-      contextUsagePct: (r.context_usage_pct as number | null) ?? null,
-      startedAt: r.started_at as number,
-      endedAt: (r.ended_at as number | null) ?? null,
-    };
+    return this.mapAudit(r);
   }
 
   getDailyAnalytics(days = 7): Array<{
@@ -835,5 +878,29 @@ export class Store {
     return [...counts.entries()]
       .map(([tool, count]) => ({ tool, count }))
       .sort((a, b) => b.count - a.count);
+  }
+
+  /**
+   * Backfill engine/model on audit rows written before multi-engine support
+   * (engine IS NULL): they all ran on the then-only engine, so stamp them with
+   * the configured default engine and (when set) its configured default model.
+   * Idempotent — rows already carrying an engine are left untouched, so this
+   * runs safely on every startup and never overwrites real per-run values.
+   */
+  backfillAuditDefaults(engine: EngineBackend, model?: string): void {
+    const pending = this.db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE engine IS NULL").get() as { n: number };
+    const pendingTasks = this.db.prepare("SELECT COUNT(*) AS n FROM running_tasks WHERE engine IS NULL").get() as { n: number };
+    if (!pending.n && !pendingTasks.n) return;
+    const tx = this.db.transaction(() => {
+      if (model) {
+        this.db.prepare("UPDATE audit_logs SET engine = ?, model = ? WHERE engine IS NULL").run(engine, model);
+        this.db.prepare("UPDATE running_tasks SET engine = ?, model = ? WHERE engine IS NULL").run(engine, model);
+      } else {
+        this.db.prepare("UPDATE audit_logs SET engine = ? WHERE engine IS NULL").run(engine);
+        this.db.prepare("UPDATE running_tasks SET engine = ? WHERE engine IS NULL").run(engine);
+      }
+    });
+    tx();
+    logger.info({ engine, model: model ?? "(cli default)", auditRows: pending.n, taskRows: pendingTasks.n }, "backfilled default engine/model onto pre-multi-engine rows");
   }
 }

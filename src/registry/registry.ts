@@ -12,6 +12,10 @@ export interface ActiveRun {
   sessionId?: string;
   /** Short label shown by /queue (the prompt or "[cron] …"). */
   displayText: string;
+  /** Engine backend this run was dispatched to (shown by /tasks and admin). */
+  engine?: string;
+  /** Requested model for this run (undefined = engine CLI's own default). */
+  model?: string;
 }
 
 /** One in-memory trace event for a running task. Same shape as a persisted
@@ -78,7 +82,7 @@ export class Registry {
     return this.active.get(chatId);
   }
 
-  start(chatId: number, projectPath: string, sessionId: string | null, prompt: PromptInput, displayText: string): ActiveRun {
+  start(chatId: number, projectPath: string, sessionId: string | null, prompt: PromptInput, displayText: string, engine?: string, model?: string): ActiveRun {
     const taskId = randomUUID();
     const abortController = new AbortController();
     const run: ActiveRun = {
@@ -89,6 +93,8 @@ export class Registry {
       startedAt: Date.now(),
       sessionId: sessionId ?? undefined,
       displayText,
+      engine,
+      model,
     };
     const task: RunningTask = {
       id: taskId,
@@ -98,6 +104,8 @@ export class Registry {
       // The DB stores the text portion of the prompt; media isn't persisted.
       prompt: prompt.text,
       status: "running",
+      engine: engine ?? null,
+      model: model ?? null,
       startedAt: run.startedAt,
       endedAt: null,
     };

@@ -99,3 +99,35 @@ test("TaskDashboard finalizes into aborted settlement card", async () => {
   assert.ok(text.includes("任务已中断"));
   assert.ok(text.includes("用户中断"));
 });
+
+test("TaskDashboard shows engine and model on running and settlement cards", async () => {
+  const api = makeStubApi();
+  const dashboard = new TaskDashboard(api, 12345, 0, { engine: "claude", model: "sonnet-4-5" });
+  await dashboard.start();
+  assert.ok(api.sent[0].text.includes("引擎"), api.sent[0].text);
+  assert.ok(api.sent[0].text.includes("Claude Code"));
+  assert.ok(api.sent[0].text.includes("sonnet-4-5"));
+
+  // The driver's init event refreshes the card with the actually-resolved model.
+  dashboard.setEngineModel("claude", "claude-opus-4-1");
+  await dashboard.flush();
+  assert.ok(api.edited[0].text.includes("claude-opus-4-1"));
+
+  await dashboard.finalize({ status: "done", durationMs: 1000 });
+  const text = api.edited[api.edited.length - 1].text;
+  assert.ok(text.includes("任务执行完成"));
+  assert.ok(text.includes("claude-opus-4-1"));
+});
+
+test("TaskDashboard labels OpenCode and falls back to 默认 without a model", async () => {
+  const api = makeStubApi();
+  const dashboard = new TaskDashboard(api, 12345, 0, { engine: "opencode" });
+  await dashboard.start();
+  assert.ok(api.sent[0].text.includes("OpenCode"));
+  assert.ok(api.sent[0].text.includes("默认"));
+
+  await dashboard.finalize({ status: "error", errorMessage: "boom" });
+  const text = api.edited[api.edited.length - 1].text;
+  assert.ok(text.includes("任务发生错误"));
+  assert.ok(text.includes("OpenCode"));
+});

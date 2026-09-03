@@ -72,7 +72,21 @@ export interface RunOutcome {
   outputTokens?: number;
   contextUsagePct?: number;
   engine?: string;
+  /** Model the run actually used, as reported by the driver's init event. */
+  model?: string;
   tools: string[];
+}
+
+/**
+ * Resolve the engine backend and model for a chat's next run: the chat's
+ * per-chat overrides (/engine, /models) win, else the config defaults. The
+ * model may be undefined, meaning "let the engine CLI pick its own default".
+ */
+export function resolveEngineModel(store: Store, config: Config, chatId: number): { engine: Config["backend"]; model: string | undefined } {
+  const binding = store.getBinding(chatId);
+  const engine = binding?.engine ?? config.backend;
+  const model = binding?.model ?? (engine === "opencode" ? config.opencode?.model : config.claude.model);
+  return { engine, model };
 }
 
 /**
@@ -100,17 +114,15 @@ export async function runTurn(opts: {
   const driver = runClaudeFn ?? runAgent;
 
   const indicator = new SilenceIndicator(api, chatId);
-  // Engine backend for this run: chat override wins, else global config default.
-  const engine = store.getBinding(chatId)?.engine ?? config.backend;
+  // Engine backend + model for this run: chat overrides win, else config defaults.
+  // Model undefined means "don't set options.model" — the driver CLI picks its own default.
+  const { engine, model } = resolveEngineModel(store, config, chatId);
 
   // Interactive tool approval: only for interactive tasks (cron runs
   // unattended → auto-approve) and only when the chat's mode is "interactive".
   // Otherwise the driver falls back to headless auto-approve.
   const approvalCfg = config.claude.approval;
   const chatMode = store.getBinding(chatId)?.approvalMode ?? approvalCfg?.mode ?? "auto";
-  // Model for this run: the chat's /models pick wins, else engine-specific config
-  // default. Undefined means "don't set options.model" — the driver CLI picks its own default.
-  const model = store.getBinding(chatId)?.model ?? (engine === "opencode" ? config.opencode?.model : config.claude.model);
   const installApproval = chatMode === "interactive" && origin !== "cron" && !!approvalCfg;
   const canUseToolHandler = installApproval && approvalCfg
     ? (req: PermissionRequest, sig: AbortSignal): Promise<PermissionDecision> =>
@@ -145,7 +157,7 @@ export async function runTurn(opts: {
   typingTimer.ref();   // keep the process alive while the task runs
   api.sendChatAction(chatId, "typing").catch(() => undefined);
 
-  logger.info({ chatId, project: projectPath, engine, resume: sessionId ?? null }, "starting agent task");
+  logger.info({ chatId, project: projectPath, engine, model: model ?? "(cli default)", resume: sessionId ?? null }, "starting agent task");
 
   let hadError = false;
   let driverAborted = false;
@@ -161,9 +173,12 @@ export async function runTurn(opts: {
   let capturedInputTokens: number | undefined;
   let capturedOutputTokens: number | undefined;
   let capturedContextUsagePct: number | undefined;
+  // Model the engine actually picked, as reported by the init event (may differ
+  // from the requested `model`, which can be undefined = CLI default).
+  let capturedModel: string | undefined;
 
   let lastNarration = "";
-  const dashboard = new TaskDashboard(api, chatId, config.telegram.flushMs);
+  const dashboard = new TaskDashboard(api, chatId, config.telegram.flushMs, { engine, model });
   let dashboardStarted = false;
   // Live Claude-Code-style task-tracker panel: the first TodoWrite call from
   // the model sends a dedicated message, and later calls edit it in place.
@@ -276,6 +291,11 @@ export async function runTurn(opts: {
               resumeId = ev.sessionId;
               onSessionId?.(ev.sessionId);
             }
+            // The init event reports the model the engine actually resolved
+            // (the requested model may be undefined = CLI default) — surface
+            // it on the dashboard card and in the audit.
+            capturedModel = ev.model || model;
+            dashboard.setEngineModel(engine, capturedModel);
             if (!dashboardStarted) {
               await dashboard.start();
               dashboardStarted = true;
@@ -564,6 +584,7 @@ export async function runTurn(opts: {
     outputTokens: capturedOutputTokens,
     contextUsagePct: capturedContextUsagePct,
     engine,
+    model: capturedModel,
     tools: toolsUsed,
   };
 }
@@ -581,6 +602,8 @@ interface RunOneOpts {
   /** "interactive" (default) enables approval prompts; "cron" forces auto-approve. */
   origin?: "interactive" | "cron";
   onSessionId?: (id: string) => void;
+  /** Test seam: inject a fake driver instead of the real agent driver (forwarded to runTurn). */
+  runClaudeFn?: typeof runAgent;
 }
 
 /**
@@ -590,7 +613,7 @@ interface RunOneOpts {
  * interactive message could start a concurrent run.
  */
 export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
-  const { api, chatId, projectPath, sessionId, prompt, displayText, config, registry, store, origin, onSessionId } = opts;
+  const { api, chatId, projectPath, sessionId, prompt, displayText, config, registry, store, origin, onSessionId, runClaudeFn } = opts;
 
   // Guardrail: reject when the chat's daily spend/token quota is exhausted.
   // Single choke point for interactive, queued, and cron tasks.
@@ -606,7 +629,11 @@ export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
   // text, and a request to end with a <next-actions> block we turn into buttons.
   const directedPrompt: PromptInput = { ...prompt, text: `${prompt.text}\n${FORMAT_DIRECTIVE}\n${NEXT_ACTIONS_DIRECTIVE}` };
 
-  const run = registry.start(chatId, projectPath, sessionId, prompt, displayText);
+  // Resolve the engine/model up front so the active-run record (and hence the
+  // admin tasks view) shows what this run was dispatched with. runTurn resolves
+  // the same values again for its dispatch options.
+  const { engine, model } = resolveEngineModel(store, config, chatId);
+  const run = registry.start(chatId, projectPath, sessionId, prompt, displayText, engine, model);
   const outcome = await runTurn({
     api,
     chatId,
@@ -620,6 +647,7 @@ export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
     abortSignal: run.abortController.signal,
     taskId: run.taskId,
     onSessionId,
+    runClaudeFn,
   });
 
   // Audit: persist what ran, what it cost, and which tools it touched.
@@ -636,6 +664,7 @@ export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
     outputTokens: outcome.outputTokens ?? null,
     contextUsagePct: outcome.contextUsagePct ?? null,
     engine: outcome.engine ?? null,
+    model: outcome.model ?? null,
     startedAt: run.startedAt,
     endedAt: Date.now(),
   });

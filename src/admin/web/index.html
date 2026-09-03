@@ -706,6 +706,29 @@
         </div>
       </div>
 
+      <!-- Engine / Model usage breakdown (multi-engine stats) -->
+      <div class="grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="panel-container" style="padding:1.3rem;">
+          <div class="panel-header" style="padding:0 0 0.8rem 0; margin-bottom:0.9rem;">
+            <span>引擎使用分布</span>
+            <span class="panel-tag">Engines</span>
+          </div>
+          <div id="engineBreakdownContainer" style="display:flex; flex-direction:column; gap:0.9rem;">
+            <div style="color:var(--text-faint); font-family:var(--font-mono); font-size:0.78rem;">暂无引擎统计</div>
+          </div>
+        </div>
+
+        <div class="panel-container" style="padding:1.3rem;">
+          <div class="panel-header" style="padding:0 0 0.8rem 0; margin-bottom:0.9rem;">
+            <span>模型使用分布</span>
+            <span class="panel-tag">Models</span>
+          </div>
+          <div id="modelBreakdownContainer" style="display:flex; flex-direction:column; gap:0.9rem;">
+            <div style="color:var(--text-faint); font-family:var(--font-mono); font-size:0.78rem;">暂无模型统计</div>
+          </div>
+        </div>
+      </div>
+
       <div class="panel-container">
         <div class="panel-header">
           <span>当前正在运行的任务</span>
@@ -719,13 +742,14 @@
               <th>Chat ID</th>
               <th class="col-wrap">工程路径</th>
               <th class="col-wrap">Prompt 内容</th>
+              <th class="col-wrap">引擎 / 模型</th>
               <th>耗时</th>
               <th class="col-wrap">当前动作</th>
               <th>操作</th>
             </tr>
           </thead>
           <tbody id="activeTasksBody">
-            <tr><td colspan="7" style="text-align:center; color:var(--text-faint); font-family:var(--font-mono); padding:1.6rem;">暂无运行中的任务</td></tr>
+            <tr><td colspan="8" style="text-align:center; color:var(--text-faint); font-family:var(--font-mono); padding:1.6rem;">暂无运行中的任务</td></tr>
           </tbody>
         </table>
         </div>
@@ -747,6 +771,7 @@
               <th>Chat ID</th>
               <th>Status</th>
               <th class="col-wrap">Prompt 摘要</th>
+              <th class="col-wrap">引擎 / 模型</th>
               <th class="col-wrap">工具使用</th>
               <th>Tokens</th>
               <th>Cost ($USD)</th>
@@ -754,7 +779,7 @@
             </tr>
           </thead>
           <tbody id="auditLogsBody">
-            <tr><td colspan="8" style="text-align:center; color:var(--text-faint); font-family:var(--font-mono); padding:1.6rem;">加载中...</td></tr>
+            <tr><td colspan="9" style="text-align:center; color:var(--text-faint); font-family:var(--font-mono); padding:1.6rem;">加载中...</td></tr>
           </tbody>
         </table>
         </div>
@@ -827,6 +852,7 @@
               <th>Chat ID</th>
               <th class="col-wrap">Project Path</th>
               <th class="col-wrap">Session ID</th>
+              <th class="col-wrap">引擎 / 模型覆盖</th>
               <th>授权模式</th>
               <th>更新时间</th>
               <th>操作</th>
@@ -1066,6 +1092,44 @@
       return `${h}h ${m}m ${s}s`;
     }
 
+    /** Display label for an engine backend id (raw id passes through). */
+    function engineLabel(e) {
+      if (e === "claude") return "Claude Code";
+      if (e === "opencode") return "OpenCode";
+      return e || "—";
+    }
+
+    /** Label for a model bucket: the fallback bucket from pre-multi-engine
+     *  history (and unset picks) reads as the engine's default. */
+    function modelLabel(m) {
+      return m === "default" ? "默认 (CLI 默认模型)" : (m || "—");
+    }
+
+    /** Render an engine/model usage breakdown as name + count rows with a
+     *  progress bar (same visual language as the tools breakdown). */
+    function renderBreakdown(containerId, rows, labelFn) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      if (!rows || rows.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-faint); font-family:var(--font-mono); font-size:0.78rem;">暂无统计数据</div>';
+        return;
+      }
+      const maxTasks = Math.max(...rows.map(r => r.tasks), 1);
+      container.innerHTML = rows.map(r => {
+        const pct = Math.round((r.tasks / maxTasks) * 100);
+        const sub = `$${(r.costUsd || 0).toFixed(4)} · ${Number(r.tokens || 0).toLocaleString()} tokens`;
+        return `
+          <div>
+            <div style="display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:0.76rem; margin-bottom:0.25rem;">
+              <span><code>${escHtml(labelFn(r))}</code></span>
+              <span style="color:var(--text-muted);">${r.tasks}次 · ${escHtml(sub)}</span>
+            </div>
+            <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${pct}%;"></div></div>
+          </div>
+        `;
+      }).join("");
+    }
+
     function toggleAddBindingForm() {
       const form = document.getElementById("addBindingForm");
       form.style.display = form.style.display === "none" ? "block" : "none";
@@ -1183,7 +1247,7 @@
           case "init":
             icon = "🚀";
             color = "var(--info)";
-            summary = "Session: " + (data.sessionId || "");
+            summary = "Session: " + (data.sessionId || "") + (data.model ? " · Model: " + data.model : "");
             break;
           default:
             summary = ev.eventType + ": " + JSON.stringify(data).slice(0, 80);
@@ -1224,6 +1288,8 @@
               <div><strong>Chat ID:</strong> ${audit.chatId}</div>
               <div><strong>Session ID:</strong> <code>${audit.sessionId || '--'}</code></div>
               <div><strong>状态:</strong> <span class="badge badge-${audit.status}">${audit.status}</span></div>
+              <div><strong>引擎:</strong> <code>${escHtml(engineLabel(audit.engine))}</code></div>
+              <div><strong>模型:</strong> <code>${escHtml(audit.model || '默认')}</code></div>
               <div><strong>开始:</strong> ${formatTime(audit.startedAt)}</div>
               <div><strong>结束:</strong> ${formatTime(audit.endedAt)}</div>
               <div><strong>耗时:</strong> ${audit.durationMs ? (audit.durationMs / 1000).toFixed(1) + 's' : '--'}</div>
@@ -1431,6 +1497,12 @@
           document.getElementById("valSuccessRate").innerText = `成功率: ${rate}% (完成: ${stats.doneTasks}, 错误: ${stats.errorTasks})`;
           document.getElementById("valTotalCost").innerText = `$${(stats.totalCostUsd || 0).toFixed(4)}`;
           document.getElementById("valTotalTokens").innerText = `Tokens: ${stats.totalTokens.toLocaleString()}`;
+
+          // Engine / model usage breakdown (rows pre-dating multi-engine roll
+          // into the default engine bucket, so history still shows up).
+          renderBreakdown("engineBreakdownContainer", stats.byEngine, r =>
+            r.key === "claude" ? engineLabel(r.key) + " (含历史默认)" : engineLabel(r.key));
+          renderBreakdown("modelBreakdownContainer", stats.byModel, r => modelLabel(r.key));
         }
       } catch (e) {}
 
@@ -1487,7 +1559,7 @@
           const data = await res.json();
           const body = document.getElementById("activeTasksBody");
           if (!data.activeTasks || data.activeTasks.length === 0) {
-            body.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--text-faint); font-family:var(--font-mono); padding:1.6rem;">暂无运行中的任务</td></tr>';
+            body.innerHTML = '<tr><td colspan="8" style="text-align:center; color:var(--text-faint); font-family:var(--font-mono); padding:1.6rem;">暂无运行中的任务</td></tr>';
           } else {
             body.innerHTML = data.activeTasks.map(t => `
               <tr>
@@ -1495,6 +1567,7 @@
                 <td>${t.chatId}</td>
                 <td class="col-wrap">${t.projectPath}</td>
                 <td class="col-wrap">${t.displayText}</td>
+                <td class="col-wrap" style="font-size:0.76rem;"><code>${escHtml(engineLabel(t.engine))}</code> · <code>${escHtml(t.model || '默认')}</code></td>
                 <td>${Math.floor((Date.now() - t.startedAt)/1000)}s</td>
                 <td class="col-wrap" style="color:var(--text-muted); font-size:0.78rem;">${t.narration ? escHtml(t.narration) : '—'}</td>
                 <td>
@@ -1519,6 +1592,7 @@
               <td>${l.chatId}</td>
               <td><span class="badge badge-${l.status}">${l.status}</span></td>
               <td class="col-wrap">${l.prompt.slice(0, 30)}${l.prompt.length > 30 ? '...' : ''}</td>
+              <td class="col-wrap" style="font-size:0.76rem;"><code>${escHtml(engineLabel(l.engine))}</code> · <code>${escHtml(l.model || '默认')}</code></td>
               <td class="col-wrap"><code>${l.tools}</code></td>
               <td>${(l.inputTokens || 0) + (l.outputTokens || 0)}</td>
               <td>$${(l.costUsd || 0).toFixed(4)}</td>
@@ -1559,6 +1633,11 @@
               <td>${b.chatId}</td>
               <td class="col-wrap"><code>${b.projectPath}</code></td>
               <td class="col-wrap"><code>${b.sessionId || '--'}</code></td>
+              <td class="col-wrap" style="font-size:0.76rem;">
+                ${(b.engine || b.model)
+                  ? `<code>${escHtml(engineLabel(b.engine))}</code> · <code>${escHtml(b.model || '默认模型')}</code>`
+                  : '<span style="color:var(--text-faint);">跟随全局默认</span>'}
+              </td>
               <td><span class="badge badge-running">${b.approvalMode || 'default'}</span></td>
               <td>${formatTime(b.updatedAt)}</td>
               <td><button class="btn btn-danger" onclick="unbindChat(${b.chatId})">解绑</button></td>

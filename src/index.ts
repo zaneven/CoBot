@@ -31,6 +31,9 @@ async function main(): Promise<void> {
 
   const store = new Store(config.dbPath);
   approvalManager.init(store);
+  // Stamp pre-multi-engine audit/task rows (engine IS NULL) with the configured
+  // default engine + model so admin stats and logs show them consistently.
+  store.backfillAuditDefaults(config.backend, config.claude.model);
   const swept = store.sweepStaleRunning();
   if (swept.length) logger.warn({ swept: swept.length }, "marked stale 'running' tasks as aborted (leftover from a crashed run)");
   const registry = new Registry(store, { mediaDir: join(dirname(config.dbPath), "media") });

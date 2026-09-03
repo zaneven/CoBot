@@ -40,6 +40,13 @@ export interface DashboardOutcome {
   errorMessage?: string;
 }
 
+/** Display label for an engine backend id. */
+export function engineLabel(engine?: string | null): string {
+  if (engine === "opencode") return "OpenCode";
+  if (engine === "claude") return "Claude Code";
+  return engine || "默认";
+}
+
 /**
  * Manages the dedicated "Task Dashboard Card" (Message 1).
  *
@@ -61,17 +68,40 @@ export class TaskDashboard {
   private dirty = false;
   private timer?: ReturnType<typeof setTimeout>;
   private chain: Promise<void> = Promise.resolve();
+  /** Engine backend + model shown on the card. The model may start as the
+   *  requested pick (or undefined = CLI default) and is refreshed with the
+   *  engine's actually-resolved model once the init event arrives. */
+  private engine?: string;
+  private model?: string;
 
   constructor(
     private api: Api,
     private chatId: number,
     private flushMs = 1000,
+    meta?: { engine?: string; model?: string },
   ) {
     this.taskStartMs = Date.now();
+    this.engine = meta?.engine;
+    this.model = meta?.model;
   }
 
   getMsgId(): number | undefined {
     return this.messageId;
+  }
+
+  /** Update the engine/model shown on the card (called when the driver's init
+   *  event reports the model it actually resolved). */
+  setEngineModel(engine?: string, model?: string): void {
+    if (engine) this.engine = engine;
+    if (model) this.model = model;
+    this.dirty = true;
+    this.schedule();
+  }
+
+  /** One-line "engine · model" descriptor for the card header. */
+  private renderEngineModel(): string {
+    const model = this.model ? `<code>${escHtml(this.model)}</code>` : "默认";
+    return `⚙️ <b>引擎</b>：${escHtml(engineLabel(this.engine))} · <b>模型</b>：${model}`;
   }
 
   /** Send the initial Dashboard Card with a stop button. */
@@ -153,6 +183,7 @@ export class TaskDashboard {
     const elapsed = fmtDuration(Date.now() - this.taskStartMs);
     const lines = [
       `🤖 <b>任务进行中</b> · ⏱️ <code>${elapsed}</code>`,
+      this.renderEngineModel(),
       `───────────────────`,
       `⚡️ <b>当前动作</b>：${escHtml(this.activeStatus)}`,
     ];
@@ -207,6 +238,7 @@ export class TaskDashboard {
 
     if (outcome.status === "done") {
       lines.push(`✅ <b>任务执行完成</b> · ⏱️ <code>${dur}</code>`);
+      lines.push(this.renderEngineModel());
       lines.push(`───────────────────`);
       const metaParts: string[] = [];
       if (outcome.costUsd !== undefined) metaParts.push(`💰 $${outcome.costUsd.toFixed(4)}`);
@@ -226,12 +258,14 @@ export class TaskDashboard {
     } else if (outcome.status === "aborted") {
       const reason = outcome.abortedReason ? ` (${outcome.abortedReason})` : "";
       lines.push(`⏹ <b>任务已中断</b>${reason} · ⏱️ <code>${dur}</code>`);
+      lines.push(this.renderEngineModel());
       const tools = fmtToolBreakdown(this.toolCounts);
       if (tools) {
         lines.push(`📦 <b>已调用工具</b>：${escHtml(tools)}`);
       }
     } else {
       lines.push(`⚠️ <b>任务发生错误</b> · ⏱️ <code>${dur}</code>`);
+      lines.push(this.renderEngineModel());
       if (outcome.errorMessage) {
         lines.push(`<code>${escHtml(outcome.errorMessage.slice(0, 300))}</code>`);
       }

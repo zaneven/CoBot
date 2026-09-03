@@ -11,7 +11,7 @@ import { logger } from "../util/logger.js";
 
 export async function* runAgent(params: RunParams, backend: EngineBackend = "claude"): AsyncGenerator<DriverEvent> {
   const chosenBackend = params.backend || backend;
-  logger.info({ chosenBackend, cwd: params.cwd, resume: params.resume }, "dispatching task to agent driver");
+  logger.info({ chosenBackend, model: params.model ?? "(cli default)", cwd: params.cwd, resume: params.resume }, "dispatching task to agent driver");
 
   if (chosenBackend === "opencode") {
     yield* runOpenCode(params);
