@@ -484,3 +484,119 @@ test("finalize is idempotent — a second call is a no-op", async () => {
   assert.equal(api.richSent.length, sentBefore, "no duplicate message on second finalize");
   assert.equal(api.replyMarkupEdits.length, markupBefore, "no duplicate markup attach on second finalize");
 });
+
+// ── reply_markup must NOT nest inside rich_message ────────────────────────
+// Telegram rejects reply_markup nested inside a rich_message object. Buttons
+// are attached separately via editMessageReplyMarkup. Regression: previously
+// the streamer folded reply_markup into the rich payload, so the rich edit at
+// finalize was rejected and the final answer (> 4096 chars) was lost entirely
+// (the HTML fallback can't carry a chunk over Telegram's 4096 text limit).
+
+test("sendStreamMessage never nests reply_markup inside the rich_message payload", async () => {
+  const api = makeStubApi();
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  const kb = { inline_keyboard: [[{ text: "继续", callback_data: "x" }]] };
+  await streamer.setContent("done");
+  await streamer.finalize(kb);
+  assert.equal(api.richSent.length, 1, "one rich message");
+  assert.equal(
+    api.richSent[0].rich_message.reply_markup,
+    undefined,
+    "reply_markup must NOT be nested inside the rich_message object",
+  );
+  assert.equal(api.edits.length, 0, "no edits — fresh send, not edit");
+  // Keyboard attached via editMessageReplyMarkup, not via the rich payload.
+  assert.equal(api.replyMarkupEdits.length, 1);
+});
+
+test("a long final answer (>4096) with buttons is delivered as rich, not lost", async () => {
+  // Simulate Telegram: sendMessage/editMessageText(text) reject > 4096 chars;
+  // rich payloads (sendRichMessage/editMessageText with rich_message) reject
+  // reply_markup nested inside rich_message (the bug that lost the final msg).
+  const api = makeStubApi();
+  const plainSends: Array<{ text: string; options: any }> = [];
+  const rejectNestedMarkup = (rm: any): void => {
+    if (rm && rm.reply_markup) throw new Error("Bad Request: invalid rich_message field reply_markup");
+  };
+  const origRich = api.sendRichMessage;
+  api.sendRichMessage = async (_c: number, rich_message: any, extra?: Record<string, unknown>) => {
+    rejectNestedMarkup(rich_message);
+    return origRich.call(api, _c, rich_message, extra);
+  };
+  const origEdit = api.editMessageText;
+  api.editMessageText = async (_c: number, msgId: number, textOrRich: any, extra?: Record<string, unknown>) => {
+    if (typeof textOrRich === "object") rejectNestedMarkup(textOrRich); // rich edit
+    else if (textOrRich.length > 4096) throw new Error("Bad Request: message is too long (text > 4096)");
+    return origEdit.call(api, _c, msgId, textOrRich, extra);
+  };
+  api.sendMessage = async (_c: number, text: string, extra?: Record<string, unknown>) => {
+    if (text.length > 4096) throw new Error("Bad Request: message is too long (> 4096)");
+    plainSends.push({ text, options: extra });
+    return { message_id: 200 };
+  };
+
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  await streamer.setContent("intro");
+  await streamer.flush(); // probe rich → msg 100, richMode = true
+  // Final answer ~5500 chars (over the 4096 HTML limit) + buttons.
+  await streamer.setContent("intro\n\n" + "x".repeat(5400));
+  const kb = { inline_keyboard: [[{ text: "继续", callback_data: "x" }]] };
+  await streamer.finalize(kb);
+
+  // The final message was delivered as a rich edit (no reply_markup nested),
+  // NOT lost to the HTML/plain fallback which can't carry > 4k chars.
+  assert.ok(api.edits.some((e: any) => e.textOrRich?.markdown), "final delivered as a rich edit");
+  assert.equal(plainSends.length, 0, "no plain/HTML fallback for the > 4k final answer");
+  assert.equal(api.replyMarkupEdits.length, 1, "keyboard attached via editMessageReplyMarkup");
+});
+
+// ── failed rich edit retries as a fresh sendRichMessage ───────────────────
+// A rich edit can fail (message too old, server hiccup). Rather than
+// permanently degrading the stream to HTML (which drops chunks > 4k), the
+// edit is retried as a new sendRichMessage — content is never lost and
+// later chunks keep rendering as rich.
+
+test("a failed rich edit retries as a fresh sendRichMessage and keeps richMode", async () => {
+  const api = makeStubApi();
+  const plainSends: unknown[] = [];
+  api.sendMessage = async (_c: number, _text: string, extra?: Record<string, unknown>) => {
+    plainSends.push({ extra });
+    return { message_id: 200 };
+  };
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  await streamer.setContent("first");
+  await streamer.flush(); // rich send → msg 100
+  assert.equal(api.richSent.length, 1);
+
+  // Make the rich edit fail (non-benign), simulating "message too old".
+  api.editMessageText = async () => { throw new Error("Bad Request: message can't be edited"); };
+  await streamer.setContent("first\n\nsecond");
+  await streamer.flush(); // rich edit fails → delete + resend
+
+  // The stale message was deleted and a fresh rich message was sent.
+  assert.equal(api.deleted.length, 1, "stale message deleted before resend");
+  assert.equal(api.richSent.length, 2, "content resent as a new rich message");
+  // richMode stayed true (not degraded to HTML), so no plain/HTML sends.
+  assert.equal(plainSends.length, 0, "no HTML/plain fallback — stream stays rich");
+});
+
+test("a > 32k final answer splits into rich messages (second chunk is rich, not plain)", async () => {
+  const api = makeStubApi();
+  const plainSends: unknown[] = [];
+  api.sendMessage = async (_c: number, _text: string, extra?: Record<string, unknown>) => {
+    plainSends.push({ extra });
+    return { message_id: 200 };
+  };
+  const streamer = new TelegramStreamer(api, 1, 32000, 0);
+  const big = "line ".repeat(8000); // ~40000 chars → overflows one 32k message
+  await streamer.setContent(big);
+  await streamer.finalize();
+
+  // Both chunks sent via sendRichMessage — the second is NOT plain text.
+  assert.equal(api.richSent.length, 2, "splits into exactly 2 rich messages");
+  assert.equal(plainSends.length, 0, "no plain/HTML fallback — both chunks rich");
+  // No content lost: the concatenation reproduces the input (minus the
+  // blank-line trim render() applies).
+  const recombined = api.richSent.map((r: any) => r.rich_message.markdown).join("");
+  assert.ok(recombined.replace(/\n{3,}/g, "\n\n").includes(big.trim()));
+});

@@ -278,7 +278,11 @@ export class TelegramStreamer {
         m.id = id;
         m.text = want;
       } else if (m.text !== want || markup) {
-        await this.sendStreamMessage(want, m.id, markup);
+        // A failed rich edit is retried as a fresh sendRichMessage (see
+        // sendStreamMessage), which returns a NEW message id — record it so
+        // later edits target the replacement, not the deleted original.
+        const id = await this.sendStreamMessage(want, m.id, markup);
+        if (id !== undefined && id !== m.id) m.id = id;
         m.text = want;
       }
       // else: unchanged frozen chunk — skip the edit entirely.
@@ -366,8 +370,19 @@ export class TelegramStreamer {
    * first ever call probes Rich Messages and settles {@link richMode}; after
    * that the settled transport is used. Returns the message id for new sends
    * (so the caller can record it on the slot), or the same id for edits.
-   * Transports are tried in priority order; once settled it won't flip-flop —
-   * a mid-stream failure falls down to HTML but never renegotiates back up.
+   *
+   * `replyMarkup` is deliberately NOT forwarded into the rich payload: Telegram
+   * rejects `reply_markup` nested inside a `rich_message` object (and silently
+   * ignores it when passed alongside), so buttons are attached separately by
+   * {@link finalize}'s `editMessageReplyMarkup` step. Only the HTML fallback
+   * (which uses the standard `text`/`parse_mode` fields) carries the keyboard
+   * inline.
+   *
+   * Transports are tried in priority order. A failed rich EDIT is retried as a
+   * fresh `sendRichMessage` (deleting the stale message first) before
+   * degrading to HTML — this keeps {@link richMode} true so later chunks still
+   * render as rich, and never drops content the way HTML would (HTML is capped
+   * at Telegram's 4096-char text limit and can't carry a > 4k chunk).
    */
   private async sendStreamMessage(
     markdown: string,
@@ -376,15 +391,12 @@ export class TelegramStreamer {
   ): Promise<number | undefined> {
     const apiAny = this.api as any;
     const edit = msgId !== undefined;
+    const safe = sanitizeStreamMarkdown(markdown);
 
     // ── first flush: probe Rich Messages ──────────────────────────────
     if (this.richMode === null) {
       try {
-        const safe = sanitizeStreamMarkdown(markdown);
-        const m = await apiAny.sendRichMessage(this.chatId, {
-          markdown: safe,
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        });
+        const m = await apiAny.sendRichMessage(this.chatId, { markdown: safe });
         this.richMode = true;
         return m.message_id;
       } catch (err) {
@@ -398,25 +410,42 @@ export class TelegramStreamer {
     // ── Rich mode — edit in place (or send new for a new slot) ────────
     if (this.richMode) {
       try {
-        const safe = sanitizeStreamMarkdown(markdown);
         if (edit) {
-          await apiAny.editMessageText(this.chatId, msgId, {
-            markdown: safe,
-            ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-          });
+          await apiAny.editMessageText(this.chatId, msgId, { markdown: safe });
           return msgId;
         }
-        const m = await apiAny.sendRichMessage(this.chatId, {
-          markdown: safe,
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-        });
+        const m = await apiAny.sendRichMessage(this.chatId, { markdown: safe });
         return m.message_id;
       } catch (err) {
         if (isBenign(err)) return msgId;
         logger.debug(
           { err: String(err) },
-          "rich edit/send failed; switching to HTML",
+          "rich edit/send failed; retrying as new rich message",
         );
+        // An edit can fail (message too old, or the server rejecting the rich
+        // payload). Rather than permanently degrading the whole stream to HTML
+        // — which can't carry a chunk > Telegram's 4096-char text limit and
+        // would DROP the content — retry as a fresh sendRichMessage (the
+        // reliable path, supports up to 32k). Delete the stale message first so
+        // the user doesn't see a duplicate. Keep richMode true so subsequent
+        // chunks still render as rich.
+        if (edit) {
+          try {
+            await apiAny.deleteMessage(this.chatId, msgId!);
+          } catch {
+            /* best effort — the message may already be gone */
+          }
+          try {
+            const m = await apiAny.sendRichMessage(this.chatId, { markdown: safe });
+            return m.message_id; // new id — syncMessages updates the slot
+          } catch (err2) {
+            if (isBenign(err2)) return undefined;
+            logger.debug(
+              { err: String(err2) },
+              "rich resend failed; switching to HTML",
+            );
+          }
+        }
         this.richMode = false;
         // Fall through to HTML — re-render this chunk on the same id (or new).
       }
