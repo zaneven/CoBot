@@ -39,6 +39,19 @@ defaults:
   dailyTokenCap: 20000000 # example: 200k tokens per chat per day (undefined = no cap)
   showTraceText: true # true = include intermediate narration trace text blocks in the final reply
 
+# AI Engine backend ("claude" | "opencode"). Default is "claude".
+# Override per-chat at runtime with /engine.
+# env: COBOT_BACKEND=claude | opencode
+backend: claude
+
+# OpenCode engine configuration (when backend is opencode or chosen via /engine).
+opencode:
+  # path: "/opt/homebrew/bin/opencode" # custom opencode binary path (env: OPENCODE_PATH)
+  # model: "agent-plan/glm-5-3-flash"  # default model for opencode (env: OPENCODE_MODEL)
+  # agent: "coder"                     # default agent (env: OPENCODE_AGENT)
+  autoApprove: true                    # auto-approve permissions (env: OPENCODE_AUTO_APPROVE)
+  timeoutMs: 600000                    # task timeout in ms
+
 # Built-in Web Admin Panel configuration
 admin:
   enabled: true # true = start Web Admin HTTP server on startup

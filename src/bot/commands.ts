@@ -1,12 +1,13 @@
 import { InlineKeyboard, Keyboard, type Context } from "grammy";
 import { mkdirSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
-import type { Config } from "../config.js";
+import type { Config, EngineBackend } from "../config.js";
 import { isPathAllowed, listDevProjects, type DevProject } from "../config.js";
 import type { Store, ApprovalMode } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
 import type { CronManager } from "../scheduler/cron.js";
-import { listProjectSessions, listAllSessions, findSession } from "../claude/sessions.js";
+import { listAgentSessions, listAllAgentSessions, findAgentSession, listAgentModels } from "../driver/index.js";
+import type { SwitchableModels } from "../claude/models.js";
 import { submitInteractive } from "./runs.js";
 import { dialogManager } from "./dialog.js";
 import { runBotCtl, tailBotLog, type BotCtlAction } from "./ctl.js";
@@ -29,7 +30,8 @@ export const BOT_COMMANDS: readonly BotCommandDef[] = [
   { command: "unbind", usage: "/unbind", description: "unbind this chat from its project" },
   { command: "new", usage: "/new", description: "start a fresh session" },
   { command: "auto", usage: "/auto [off]", description: "persistent auto session mode" },
-  { command: "sessions", usage: "/sessions [all]", description: "list Claude Code sessions (tap to switch)" },
+  { command: "engine", usage: "/engine [claude|opencode|default]", description: "switch backend agent engine" },
+  { command: "sessions", usage: "/sessions [all]", description: "list agent sessions (tap to switch)" },
   { command: "switch", usage: "/switch <id>", description: "switch the active session by id" },
   { command: "stop", usage: "/stop", description: "interrupt the running task" },
   { command: "tasks", usage: "/tasks", description: "active + recent tasks" },
@@ -38,7 +40,7 @@ export const BOT_COMMANDS: readonly BotCommandDef[] = [
   { command: "cron", usage: "/cron <5-field cron> | <prompt>", description: "schedule a task" },
   { command: "context", usage: "/context", description: "last turn's context window usage"},
   { command: "skills", usage: "/skills", description: "browse and select skills" },
-  { command: "models", usage: "/models [<id>|off]", description: "pick the Claude model (buttons)" },
+  { command: "models", usage: "/models [<id>|off]", description: "pick the model (buttons)" },
   { command: "approve", usage: "/approve auto|interactive", description: "tool-call approval mode" },
   { command: "bot", usage: "/bot <start|stop|restart|status|install>", description: "control the bot (--watch for hot-reload)" },
   { command: "restart", usage: "/restart", description: "restart the bot (keeps current launch mode)" },
@@ -452,21 +454,22 @@ export async function handleText(ctx: Context, config: Config, store: Store, reg
 }
 
 /**
- * /sessions [all] - list Claude Code sessions for the bound project (or across
+ * /sessions [all] - list agent sessions for the bound project (or across
  * all projects with `all`), as inline buttons. Tapping a button switches to it.
  */
-export async function handleSessions(ctx: Context, store: Store): Promise<void> {
+export async function handleSessions(ctx: Context, config: Config, store: Store): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const b = store.getBinding(chatId);
+  const engine = b?.engine ?? config.backend;
   const wantAll = (typeof ctx.match === "string" ? ctx.match.trim() : "") === "all";
   if (!b && !wantAll) {
     await ctx.reply("Pick a project first: /projects\n(or use /sessions all)");
     return;
   }
-  const sessions = wantAll ? await listAllSessions(20) : await listProjectSessions(b!.projectPath, 20);
+  const sessions = wantAll ? await listAllAgentSessions(engine, 20) : await listAgentSessions(b!.projectPath, engine, 20);
   if (!sessions.length) {
-    await ctx.reply(wantAll ? "No sessions found." : `No sessions found for ${b!.projectPath}`);
+    await ctx.reply(wantAll ? `No ${engine} sessions found.` : `No ${engine} sessions found for ${b!.projectPath}`);
     return;
   }
   const current = b?.sessionId ?? null;
@@ -476,13 +479,13 @@ export async function handleSessions(ctx: Context, store: Store): Promise<void> 
     const label = `${mark}${truncate(s.summary, 48)} · ${relTime(s.lastModified)} · ${s.sessionId.slice(0, 6)}`;
     kb.text(label, `sw:${s.sessionId}`).row();
   }
-  await ctx.reply(`${wantAll ? "All sessions" : `Sessions in ${b!.projectPath}`} (tap to switch):`, {
+  await ctx.reply(`${wantAll ? "All sessions" : `Sessions in ${b!.projectPath}`} [${engine}] (tap to switch):`, {
     reply_markup: kb,
   });
 }
 
 /** /switch <session-id> - switch the chat's active session by id. */
-export async function handleSwitch(ctx: Context, store: Store): Promise<void> {
+export async function handleSwitch(ctx: Context, config: Config, store: Store): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const arg = typeof ctx.match === "string" ? ctx.match.trim() : "";
@@ -490,27 +493,28 @@ export async function handleSwitch(ctx: Context, store: Store): Promise<void> {
     await ctx.reply("Usage: /switch <session-id>\nList with /sessions");
     return;
   }
-  await switchTo(ctx, store, chatId, arg);
+  await switchTo(ctx, config, store, chatId, arg);
 }
 
 /** Callback handler for inline `sw:<sessionId>` buttons from /sessions. */
-export async function handleSwitchCallback(ctx: Context, store: Store): Promise<void> {
+export async function handleSwitchCallback(ctx: Context, config: Config, store: Store): Promise<void> {
   const data = ctx.callbackQuery?.data ?? "";
   if (!data.startsWith("sw:")) return;
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const id = data.slice(3);
-  await switchTo(ctx, store, chatId, id);
+  await switchTo(ctx, config, store, chatId, id);
   await ctx.answerCallbackQuery({ text: "switched" });
 }
 
-async function switchTo(ctx: Context, store: Store, chatId: number, sessionId: string): Promise<void> {
-  const info = await findSession(sessionId);
+async function switchTo(ctx: Context, config: Config, store: Store, chatId: number, sessionId: string): Promise<void> {
+  const b = store.getBinding(chatId);
+  const engine = b?.engine ?? config.backend;
+  const info = await findAgentSession(sessionId, engine);
   if (!info) {
     await ctx.reply(`❌ Session not found: ${sessionId}`);
     return;
   }
-  const b = store.getBinding(chatId);
   if (!b) {
     await ctx.reply("Pick a project first: /projects");
     return;
@@ -518,6 +522,113 @@ async function switchTo(ctx: Context, store: Store, chatId: number, sessionId: s
   store.setSessionId(chatId, sessionId);
   await ctx.reply(`🔁 Switched to ${sessionId.slice(0, 8)}…\n${truncate(info.summary, 200)}`, {
     reply_markup: buildActionKeyboard(),
+  });
+}
+
+// ── /engine command — switch between Claude Code and OpenCode ──────────
+
+export const ENGINE_CB_PREFIX = "engine:";
+
+export function renderEngineKeyboard(current: EngineBackend | null, globalDefault: EngineBackend): InlineKeyboard {
+  const effective = current ?? globalDefault;
+  const isClaude = effective === "claude";
+  const isOpenCode = effective === "opencode";
+  const isDefault = current === null;
+
+  const kb = new InlineKeyboard();
+  kb.text(`${isClaude ? "✅ " : ""}Claude Code`, `${ENGINE_CB_PREFIX}claude`).row();
+  kb.text(`${isOpenCode ? "✅ " : ""}OpenCode`, `${ENGINE_CB_PREFIX}opencode`).row();
+  kb.text(`${isDefault ? "● " : ""}跟随全局默认 (${globalDefault})`, `${ENGINE_CB_PREFIX}default`).row();
+  return kb;
+}
+
+export function engineStatusText(selected: EngineBackend | null, globalDefault: EngineBackend): string {
+  const effective = selected ?? globalDefault;
+  const tag = selected === null ? `默认 (${globalDefault})` : selected;
+  return `⚙️ 当前驱动引擎: <b>${tag}</b>\n(生效引擎: <code>${effective}</code>)\n\n点击下方按钮切换当前会话所使用的 AI 编程驱动:`;
+}
+
+/** /engine [claude|opencode|default] - view or switch the chat's AI engine. */
+export async function handleEngine(ctx: Context, config: Config, store: Store): Promise<void> {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const arg = (typeof ctx.match === "string" ? ctx.match.trim().toLowerCase() : "");
+  const current = store.getBinding(chatId)?.engine ?? null;
+
+  if (!arg) {
+    await ctx.reply(engineStatusText(current, config.backend), {
+      parse_mode: "HTML",
+      reply_markup: renderEngineKeyboard(current, config.backend),
+    });
+    return;
+  }
+
+  if (!store.getBinding(chatId)) {
+    await ctx.reply("先选择项目: /projects");
+    return;
+  }
+
+  if (arg === "default" || arg === "off" || arg === "默认") {
+    store.setEngine(chatId, null);
+    store.setSessionId(chatId, null);
+    await ctx.reply(engineStatusText(null, config.backend), {
+      parse_mode: "HTML",
+      reply_markup: renderEngineKeyboard(null, config.backend),
+    });
+    return;
+  }
+
+  if (arg === "claude" || arg === "opencode") {
+    store.setEngine(chatId, arg as EngineBackend);
+    store.setSessionId(chatId, null);
+    await ctx.reply(engineStatusText(arg as EngineBackend, config.backend), {
+      parse_mode: "HTML",
+      reply_markup: renderEngineKeyboard(arg as EngineBackend, config.backend),
+    });
+    return;
+  }
+
+  await ctx.reply("用法: /engine [claude|opencode|default]");
+}
+
+/** Callback for inline `engine:<engine>` buttons. */
+export async function handleEngineCallback(ctx: Context, config: Config, store: Store): Promise<void> {
+  const data = ctx.callbackQuery?.data ?? "";
+  if (!data.startsWith(ENGINE_CB_PREFIX)) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  const chatId = ctx.chat?.id;
+  if (!chatId) {
+    await ctx.answerCallbackQuery();
+    return;
+  }
+  if (!store.getBinding(chatId)) {
+    await ctx.answerCallbackQuery({ text: "请先 /projects 选择项目" });
+    return;
+  }
+
+  const target = data.slice(ENGINE_CB_PREFIX.length);
+  let newEngine: EngineBackend | null = null;
+  if (target === "claude" || target === "opencode") {
+    newEngine = target as EngineBackend;
+  }
+
+  store.setEngine(chatId, newEngine);
+  // Reset session when switching engine
+  store.setSessionId(chatId, null);
+
+  try {
+    await ctx.editMessageText(engineStatusText(newEngine, config.backend), {
+      parse_mode: "HTML",
+      reply_markup: renderEngineKeyboard(newEngine, config.backend),
+    });
+  } catch (err) {
+    logger.debug({ err: String(err) }, "engine status edit failed");
+  }
+
+  await ctx.answerCallbackQuery({
+    text: newEngine ? `已切换到 ${newEngine}` : `已恢复全局默认 (${config.backend})`,
   });
 }
 
@@ -714,63 +825,89 @@ export async function handleSkillsPage(ctx: Context): Promise<void> {
 /** Callback data for the "default" (clear per-chat override) button. Deliberately
  *  non-numeric so it can never collide with an index into the models list. */
 const MODEL_DEFAULT_CB = "__default__";
-/** Inline-button callback prefix for /models (`model:<index>` into the config
- *  pick list, or `model:__default__`). Distinct from every other callback
- *  prefix; wired in bot.ts via /^model:/. */
+/** Inline-button callback prefix for /models (`model:<id>` with the model id
+ *  embedded, `model:i:<n>` as an index fallback, or `model:__default__`).
+ *  Distinct from every other callback prefix; wired in bot.ts via /^model:/. */
 const MODEL_CB_PREFIX = "model:";
 
-/** Inline keyboard for /models: one button per configured model (its index in
- *  the list is the callback payload, keeping callback_data short), the current
- *  pick highlighted with ✅, and a bottom "default" row that clears the
- *  per-chat override. */
+/** Telegram caps callback_data at 64 bytes. Embed the model id directly when
+ *  it fits (immune to list drift between render and tap); otherwise fall back
+ *  to an index into the merged pick list, refetched at tap time. */
+function modelCbData(model: string, index: number): string {
+  return `model:${model.length <= 64 - MODEL_CB_PREFIX.length ? model : `i:${index}`}`;
+}
+
+/** Inline keyboard for /models: one button per switchable model (merged config
+ *  + live CLI discovery), the current pick highlighted with ✅, and a bottom
+ *  "default" row that clears the per-chat override. */
 export function renderModelsKeyboard(models: string[], current: string | null): InlineKeyboard {
   const kb = new InlineKeyboard();
   models.forEach((m, i) => {
-    kb.text(`${m === current ? "✅ " : ""}${truncate(m, 60)}`, `${MODEL_CB_PREFIX}${i}`).row();
+    kb.text(`${m === current ? "✅ " : ""}${truncate(m, 60)}`, modelCbData(m, i)).row();
   });
   const defLbl = current === null ? "✅ 默认 (跟随配置)" : "⚪ 默认 (跟随配置)";
   return kb.text(defLbl, `${MODEL_CB_PREFIX}${MODEL_DEFAULT_CB}`);
 }
 
-/** Status text for /models and its callback edits. */
-function modelStatusText(selected: string | null, globalModel: string | undefined): string {
+/** Status text for /models and its callback edits. `discovered` carries the
+ *  live CLI list metadata (default model + how the list was obtained). */
+function modelStatusText(
+  selected: string | null,
+  engine: EngineBackend,
+  configModel: string | undefined,
+  discovered: SwitchableModels | undefined,
+): string {
   const selTxt = selected ?? "默认（不指定）";
-  const globTxt = globalModel ?? "(未设置)";
+  const globTxt = configModel ?? "(未设置)";
   return (
     `🧠 模型选择\n` +
+    `• 当前引擎: ${engine}\n` +
     `• 当前会话: ${selTxt}\n` +
-    `• 全局配置: ${globTxt}\n\n` +
-    `生效规则: 会话选择 > 全局配置 > Claude Code 默认\n` +
+    `• 全局配置: ${globTxt}\n` +
+    (discovered?.defaultModel ? `• CLI 默认 (default): ${discovered.defaultModel}\n` : "") +
+    `\n生效规则: 会话选择 > 全局配置 > 引擎默认\n` +
+    (discovered ? `${discovered.note}\n` : "") +
     `点按钮切换；「默认」清除会话选择；或 /models <模型ID> 直接设置。`
   );
 }
 
 /**
- * /models — view or set the per-chat Claude model.
+ * /models — view or set the per-chat model for the chat's active engine.
  *
- *   /models            → show the current selection + button picker
- *   /models <id>       → set the model (any id the CLI/gateway accepts)
- *   /models off|default→ clear the pick (follow global config / CLI default)
+ *   /models            → show the current selection + button picker (the list
+ *                        merges the engine's config list with its live CLI
+ *                        model discovery)
+ *   /models <id>       → set the model (any id the engine/gateway accepts)
+ *   /models off|default→ clear the pick (follow global config / engine default)
  *
  * The selection persists on the binding (like /approve's mode) and applies to
  * the next dispatched task, including queued and cron runs for this chat.
  */
-export async function handleModels(ctx: Context, config: Config, store: Store): Promise<void> {
+export async function handleModels(
+  ctx: Context,
+  config: Config,
+  store: Store,
+  lister: (config: Config, engine: EngineBackend) => Promise<SwitchableModels> = listAgentModels,
+): Promise<void> {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
   const arg = (typeof ctx.match === "string" ? ctx.match.trim() : "");
-  const current = store.getBinding(chatId)?.model ?? null;
+  const binding = store.getBinding(chatId);
+  const current = binding?.model ?? null;
+  // The pick list (and the fallback default) follows the chat's active engine.
+  const engine = binding?.engine ?? config.backend;
 
   // No arg → status + button picker (viewing works without a bound project).
   if (!arg) {
-    await ctx.reply(modelStatusText(current, config.claude.model), {
-      reply_markup: renderModelsKeyboard(config.claude.models, current),
+    const discovered = await lister(config, engine);
+    await ctx.reply(modelStatusText(current, engine, engineDefaultModel(config, engine), discovered), {
+      reply_markup: renderModelsKeyboard(discovered.models, current),
     });
     return;
   }
 
   // Setting requires a binding — the pick lives on it.
-  if (!store.getBinding(chatId)) {
+  if (!binding) {
     await ctx.reply("先选择项目: /projects");
     return;
   }
@@ -778,32 +915,46 @@ export async function handleModels(ctx: Context, config: Config, store: Store): 
   const lower = arg.toLowerCase();
   if (lower === "off" || lower === "default" || arg === "默认") {
     store.setModel(chatId, null);
-    await ctx.reply(modelStatusText(null, config.claude.model), {
-      reply_markup: renderModelsKeyboard(config.claude.models, null),
+    const discovered = await lister(config, engine);
+    await ctx.reply(modelStatusText(null, engine, engineDefaultModel(config, engine), discovered), {
+      reply_markup: renderModelsKeyboard(discovered.models, null),
     });
     return;
   }
 
   store.setModel(chatId, arg);
-  await ctx.reply(modelStatusText(arg, config.claude.model), {
-    reply_markup: renderModelsKeyboard(config.claude.models, arg),
+  const discovered = await lister(config, engine);
+  await ctx.reply(modelStatusText(arg, engine, engineDefaultModel(config, engine), discovered), {
+    reply_markup: renderModelsKeyboard(discovered.models, arg),
   });
 }
 
+/** The engine-specific config default a chat falls back to when it has no
+ *  /models pick — mirrors runTurn's model resolution. */
+function engineDefaultModel(config: Config, engine: EngineBackend): string | undefined {
+  return engine === "opencode" ? config.opencode?.model : config.claude.model;
+}
+
 /** Refresh an already-sent /models status message after a button tap. */
-async function editModelStatus(ctx: Context, config: Config, store: Store, selected: string | null): Promise<void> {
+async function editModelStatus(ctx: Context, config: Config, engine: EngineBackend, selected: string | null, discovered: SwitchableModels): Promise<void> {
   try {
-    await ctx.editMessageText(modelStatusText(selected, config.claude.model), {
-      reply_markup: renderModelsKeyboard(config.claude.models, selected),
+    await ctx.editMessageText(modelStatusText(selected, engine, engineDefaultModel(config, engine), discovered), {
+      reply_markup: renderModelsKeyboard(discovered.models, selected),
     });
   } catch (err) {
     logger.debug({ err: String(err) }, "models status edit failed");
   }
 }
 
-/** Callback for inline `model:<index>` / `model:__default__` buttons. Switches
- *  the chat's model and refreshes the keyboard so the ✅ marker moves. */
-export async function handleModelCallback(ctx: Context, config: Config, store: Store): Promise<void> {
+/** Callback for inline `model:<id>` / `model:i:<n>` / `model:__default__`
+ *  buttons. Switches the chat's model and refreshes the keyboard so the ✅
+ *  marker moves. */
+export async function handleModelCallback(
+  ctx: Context,
+  config: Config,
+  store: Store,
+  lister: (config: Config, engine: EngineBackend) => Promise<SwitchableModels> = listAgentModels,
+): Promise<void> {
   const data = ctx.callbackQuery?.data ?? "";
   if (!data.startsWith(MODEL_CB_PREFIX)) {
     await ctx.answerCallbackQuery();
@@ -814,32 +965,45 @@ export async function handleModelCallback(ctx: Context, config: Config, store: S
     await ctx.answerCallbackQuery();
     return;
   }
-  if (!store.getBinding(chatId)) {
+  const binding = store.getBinding(chatId);
+  if (!binding) {
     await ctx.answerCallbackQuery({ text: "请先 /projects 选择项目" });
     return;
   }
+  const engine = binding.engine ?? config.backend;
 
   const key = data.slice(MODEL_CB_PREFIX.length);
   if (key === MODEL_DEFAULT_CB) {
     store.setModel(chatId, null);
-    await editModelStatus(ctx, config, store, null);
+    const discovered = await lister(config, engine);
+    await editModelStatus(ctx, config, engine, null, discovered);
     await ctx.answerCallbackQuery({ text: "已恢复默认" });
     return;
   }
 
-  // Buttons carry the index into the current config pick list; a stale keyboard
-  // (config changed since it was rendered) answers gracefully instead of
-  // selecting the wrong model.
-  const idx = Number.parseInt(key, 10);
-  const models = config.claude.models;
-  if (!Number.isInteger(idx) || idx < 0 || idx >= models.length) {
-    await ctx.answerCallbackQuery({ text: "该选项已失效，请重新 /models" });
+  // Index fallback for ids too long to embed in callback_data: resolve against
+  // the merged list refetched at tap time. A stale index (the CLI list changed
+  // since render) answers gracefully instead of selecting the wrong model.
+  const idxMatch = /^i:(\d+)$/.exec(key);
+  if (idxMatch) {
+    const discovered = await lister(config, engine);
+    const idx = Number(idxMatch[1]);
+    if (idx >= discovered.models.length) {
+      await ctx.answerCallbackQuery({ text: "该选项已失效，请重新 /models" });
+      return;
+    }
+    const model = discovered.models[idx]!;
+    store.setModel(chatId, model);
+    await editModelStatus(ctx, config, engine, model, discovered);
+    await ctx.answerCallbackQuery({ text: `已切换为 ${model}` });
     return;
   }
-  const model = models[idx]!;
-  store.setModel(chatId, model);
-  await editModelStatus(ctx, config, store, model);
-  await ctx.answerCallbackQuery({ text: `已切换为 ${model}` });
+
+  // Embedded id — set it directly (no list lookup needed for the selection).
+  store.setModel(chatId, key);
+  const discovered = await lister(config, engine);
+  await editModelStatus(ctx, config, engine, key, discovered);
+  await ctx.answerCallbackQuery({ text: `已切换为 ${key}` });
 }
 
 /** /auto [off] — toggle persistent auto‑session mode. Stays active until /auto off or restart. */

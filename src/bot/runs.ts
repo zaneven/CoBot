@@ -3,7 +3,7 @@ import { type Config, DEFAULT_APPROVAL_SKIP_TOOLS } from "../config.js";
 import type { Store, AuditLog } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
 import type { PromptInput, PermissionRequest, PermissionDecision, UserDialogRequest, UserDialogResult } from "../claude/types.js";
-import { runClaude } from "../claude/driver.js";
+import { runAgent } from "../driver/index.js";
 import { SilenceIndicator } from "./indicator.js";
 import { sendRichText } from "../util/send.js";
 import { logger } from "../util/logger.js";
@@ -71,11 +71,12 @@ export interface RunOutcome {
   inputTokens?: number;
   outputTokens?: number;
   contextUsagePct?: number;
+  engine?: string;
   tools: string[];
 }
 
 /**
- * Run one Claude Code turn: stream the assistant output into the chat and
+ * Run one agentic turn (Claude Code or OpenCode): stream the assistant output into the chat and
  * persist the result. Does NOT touch the registry's active/queue state - the
  * caller (runOne) owns start/finish + draining.
  */
@@ -92,23 +93,24 @@ export async function runTurn(opts: {
   abortSignal: AbortSignal;
   taskId?: string;
   onSessionId?: (id: string) => void;
-  /** Test seam: inject a fake driver instead of the real SDK query. */
-  runClaudeFn?: typeof runClaude;
+  /** Test seam: inject a fake driver instead of the real agent driver. */
+  runClaudeFn?: typeof runAgent;
 }): Promise<RunOutcome> {
   const { api, chatId, projectPath, sessionId, prompt, config, registry, store, origin, abortSignal, taskId, onSessionId, runClaudeFn } = opts;
-  const driver = runClaudeFn ?? runClaude;
+  const driver = runClaudeFn ?? runAgent;
 
   const indicator = new SilenceIndicator(api, chatId);
+  // Engine backend for this run: chat override wins, else global config default.
+  const engine = store.getBinding(chatId)?.engine ?? config.backend;
 
   // Interactive tool approval: only for interactive tasks (cron runs
   // unattended → auto-approve) and only when the chat's mode is "interactive".
   // Otherwise the driver falls back to headless auto-approve.
   const approvalCfg = config.claude.approval;
   const chatMode = store.getBinding(chatId)?.approvalMode ?? approvalCfg?.mode ?? "auto";
-  // Model for this run: the chat's /models pick wins, else the global config
-  // default. Undefined means "don't set options.model" — the Claude Code CLI
-  // (or its gateway) picks its own default.
-  const model = store.getBinding(chatId)?.model ?? config.claude.model;
+  // Model for this run: the chat's /models pick wins, else engine-specific config
+  // default. Undefined means "don't set options.model" — the driver CLI picks its own default.
+  const model = store.getBinding(chatId)?.model ?? (engine === "opencode" ? config.opencode?.model : config.claude.model);
   const installApproval = chatMode === "interactive" && origin !== "cron" && !!approvalCfg;
   const canUseToolHandler = installApproval && approvalCfg
     ? (req: PermissionRequest, sig: AbortSignal): Promise<PermissionDecision> =>
@@ -143,7 +145,7 @@ export async function runTurn(opts: {
   typingTimer.ref();   // keep the process alive while the task runs
   api.sendChatAction(chatId, "typing").catch(() => undefined);
 
-  logger.info({ chatId, project: projectPath, resume: sessionId ?? null }, "starting claude task");
+  logger.info({ chatId, project: projectPath, engine, resume: sessionId ?? null }, "starting agent task");
 
   let hadError = false;
   let driverAborted = false;
@@ -182,19 +184,15 @@ export async function runTurn(opts: {
     return clean;
   }
 
-  // Trace events: capture detailed execution events for the admin trace view.
-  // Each event stamps its own createdAt so the persisted history shows the real
-  // per-event time, not a single batch-insert time (which made every event in
-  // the audit detail modal appear at the same wall-clock moment).
-  const traceEvents: Array<{ eventType: string; eventData: string; createdAt: number }> = [];
-  const MAX_TRACE_EVENTS = 500;
+  type TraceEventItem = { eventType: string; eventData: string; createdAt: number };
+  const traceEvents: TraceEventItem[] = [];
   function pushTrace(eventType: string, data: Record<string, unknown>): void {
-    if (traceEvents.length >= MAX_TRACE_EVENTS) return;
-    traceEvents.push({ eventType, eventData: JSON.stringify(data), createdAt: Date.now() });
-    // Mirror into the registry's in-memory live buffer so the admin page can
-    // show a running task's trace in real time (before it's flushed to the
-    // DB at done/error).
-    if (taskId) registry.appendTrace(taskId, eventType, data);
+    const createdAt = Date.now();
+    const eventData = JSON.stringify(data);
+    traceEvents.push({ eventType, eventData, createdAt });
+    if (taskId) {
+      registry.appendTrace(taskId, eventType, data);
+    }
   }
   // Accumulate text/thinking deltas so we store one block per round, not per-token.
   let traceTextAccum = "";
@@ -253,6 +251,7 @@ export async function runTurn(opts: {
       for await (const ev of driver({
         prompt,
         cwd: projectPath,
+        backend: engine,
         resume: resumeId,
         model,
         permissionMode: config.claude.permissionMode,
@@ -261,7 +260,10 @@ export async function runTurn(opts: {
           config.claude.permissionMode === "bypassPermissions" && config.claude.allowDangerousSkip,
         maxTurns: config.claude.maxTurns,
         signal: abortSignal,
-        timeoutMs: config.claude.taskTimeoutMs,
+        timeoutMs: engine === "opencode" ? (config.opencode?.timeoutMs ?? config.claude.taskTimeoutMs) : config.claude.taskTimeoutMs,
+        opencodePath: config.opencode?.path,
+        opencodeAutoApprove: config.opencode?.autoApprove,
+        agent: config.opencode?.agent,
         canUseToolHandler,
         userDialogHandler,
       })) {
@@ -561,6 +563,7 @@ export async function runTurn(opts: {
     inputTokens: capturedInputTokens,
     outputTokens: capturedOutputTokens,
     contextUsagePct: capturedContextUsagePct,
+    engine,
     tools: toolsUsed,
   };
 }
@@ -632,6 +635,7 @@ export async function runOne(opts: RunOneOpts): Promise<RunOutcome> {
     inputTokens: outcome.inputTokens ?? null,
     outputTokens: outcome.outputTokens ?? null,
     contextUsagePct: outcome.contextUsagePct ?? null,
+    engine: outcome.engine ?? null,
     startedAt: run.startedAt,
     endedAt: Date.now(),
   });

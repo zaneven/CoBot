@@ -34,7 +34,7 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
   };
 
   const options: Options = { cwd: params.cwd, abortController };
-  const claudeExecutable = params.claudePath ?? process.env.CLAUDE_PATH ?? (existsSync("/opt/homebrew/bin/claude") ? "/opt/homebrew/bin/claude" : undefined);
+  const claudeExecutable = resolveClaudeExecutable(params.claudePath);
   if (claudeExecutable) {
     options.pathToClaudeCodeExecutable = claudeExecutable;
   }
@@ -263,6 +263,14 @@ export async function* runClaude(params: RunParams): AsyncGenerator<DriverEvent>
  *  resumable - not a cleanup-with-error terminal state. */
 export function isMaxTurnsResult(subtype: string | undefined): boolean {
   return subtype === "error_max_turns";
+}
+
+/** Resolve the Claude Code executable to spawn: explicit param, then
+ *  CLAUDE_PATH env, then the homebrew install location. Undefined = let the
+ *  SDK use its own resolution. Shared by the driver and the /models lister so
+ *  both talk to the same CLI install. */
+export function resolveClaudeExecutable(claudePath?: string): string | undefined {
+  return claudePath ?? process.env.CLAUDE_PATH ?? (existsSync("/opt/homebrew/bin/claude") ? "/opt/homebrew/bin/claude" : undefined);
 }
 
 /** Detect if the SDK returned an error in the text result even if subtype was success. */

@@ -102,9 +102,11 @@ export type UserDialogResult =
 export interface RunParams {
   prompt: PromptInput;
   cwd: string;
+  backend?: "claude" | "opencode";
   /** Session UUID to resume. Omit to start a fresh session. */
   resume?: string;
   model?: string;
+  agent?: string;
   permissionMode?: string;
   allowedTools?: string[];
   additionalDirectories?: string[];
@@ -115,6 +117,10 @@ export interface RunParams {
   allowDangerouslySkipPermissions?: boolean;
   /** Custom path to local Claude Code executable. */
   claudePath?: string;
+  /** Custom path to local OpenCode executable. */
+  opencodePath?: string;
+  /** Whether opencode auto-approves actions. */
+  opencodeAutoApprove?: boolean;
   /** External abort signal (e.g. from /stop). */
   signal?: AbortSignal;
   /** Interactive tool-approval handler. When set, `canUseTool` delegates to it

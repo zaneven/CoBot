@@ -21,6 +21,8 @@ import {
   handleTasks,
   handleQueue,
   handleDrop,
+  handleEngine,
+  handleEngineCallback,
   handleSessions,
   handleSwitch,
   handleSwitchCallback,
@@ -77,14 +79,16 @@ export function createBot(
   bot.command("unbind", (ctx) => handleUnbind(ctx, store));
   bot.command("new", (ctx) => handleNew(ctx, store));
   bot.command("auto", (ctx) => handleAuto(ctx, config, store, registry));
+  bot.command("engine", (ctx) => handleEngine(ctx, config, store));
+  bot.callbackQuery(/^engine:/, (ctx) => handleEngineCallback(ctx, config, store));
   bot.command("stop", (ctx) => handleStop(ctx, registry));
   bot.command("tasks", (ctx) => handleTasks(ctx, store, registry));
   bot.command("queue", (ctx) => handleQueue(ctx, registry));
   bot.command("drop", (ctx) => handleDrop(ctx, registry));
-  bot.command("sessions", (ctx) => handleSessions(ctx, store));
-  bot.command("switch", (ctx) => handleSwitch(ctx, store));
+  bot.command("sessions", (ctx) => handleSessions(ctx, config, store));
+  bot.command("switch", (ctx) => handleSwitch(ctx, config, store));
   // Inline-button callback from /sessions (sw:<sessionId>).
-  bot.callbackQuery(/^sw:/, (ctx) => handleSwitchCallback(ctx, store));
+  bot.callbackQuery(/^sw:/, (ctx) => handleSwitchCallback(ctx, config, store));
 
   // CronManager needs bot.api, so construct it now that the bot exists and
   // register /cron here alongside every other command (the auth middleware above
@@ -147,8 +151,9 @@ export function createBot(
   // Keyboard‑button presses — map labels to existing handlers (supports English and Chinese).
   bot.hears(/^(New|新建)$/i,        (ctx) => handleNew(ctx, store));
   bot.hears(/^(Stop|停止)$/i,       (ctx) => handleStop(ctx, registry));
-  bot.hears(/^(Sessions?|会话)$/i,  (ctx) => handleSessions(ctx, store));
+  bot.hears(/^(Sessions?|会话)$/i,  (ctx) => handleSessions(ctx, config, store));
   bot.hears(/^(Projects?|项目)$/i,  (ctx) => handleProjects(ctx, config, store));
+  bot.hears(/^(Engine|引擎)$/i,     (ctx) => handleEngine(ctx, config, store));
   bot.hears(/^(Queue|队列)$/i,      (ctx) => handleQueue(ctx, registry));
   bot.hears(/^(Tasks?|任务)$/i,     (ctx) => handleTasks(ctx, store, registry));
   bot.hears(/^(Approve|审批)$/i,    (ctx) => handleApprove(ctx, store));

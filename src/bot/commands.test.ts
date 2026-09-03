@@ -240,9 +240,9 @@ test("buildActionKeyboard renders 2 rows of 3 English buttons without approval",
 
 // ── /models — per-chat model picker ──────────────────────────────────
 
-/** Store double for /models tests: tracks the per-chat model and reports a
- *  bound project unless `bound` is false. */
-function mkModelStore(initialModel: string | null = null, bound = true) {
+/** Store double for /models tests: tracks the per-chat model (+ optional
+ *  engine override) and reports a bound project unless `bound` is false. */
+function mkModelStore(initialModel: string | null = null, bound = true, engine: string | null = null) {
   let model = initialModel;
   return {
     get model() {
@@ -250,7 +250,7 @@ function mkModelStore(initialModel: string | null = null, bound = true) {
     },
     getBinding: () =>
       bound
-        ? { chatId: 123, projectPath: "/x", sessionId: null, approvalMode: null, model, createdAt: 0, updatedAt: 0 }
+        ? { chatId: 123, projectPath: "/x", sessionId: null, approvalMode: null, model, engine, createdAt: 0, updatedAt: 0 }
         : undefined,
     setModel: (_id: number, m: string | null) => {
       model = m;
@@ -258,14 +258,30 @@ function mkModelStore(initialModel: string | null = null, bound = true) {
   } as unknown as import("../store/db.js").Store & { model: string | null };
 }
 
+/** Lister double: returns a fixed pick list and records the engine it was
+ *  asked for, so tests can assert the engine-aware dispatch. */
+function mkLister(models: string[], error = false) {
+  const calls: string[] = [];
+  return {
+    calls,
+    lister: async (_config: unknown, engine: string) => {
+      calls.push(engine);
+      if (error) throw new Error("boom");
+      return { models, note: "stub note" };
+    },
+  };
+}
+
 const MODELS = ["m-one[1M]", "m-two", "org/m-three"];
+const CFG = { backend: "claude", claude: { model: undefined, models: MODELS } } as never;
 
 test("renderModelsKeyboard: one row per model + default row, ✅ marks the pick", () => {
   const picked = rows(renderModelsKeyboard(MODELS, "m-two"));
   assert.equal(picked.length, 4, "3 model rows + default row");
-  assert.equal(picked[0]![0]!.callback_data, "model:0");
+  // Short ids are embedded directly in callback_data (not an index).
+  assert.equal(picked[0]![0]!.callback_data, "model:m-one[1M]");
   assert.equal(picked[1]![0]!.text, "✅ m-two");
-  assert.equal(picked[1]![0]!.callback_data, "model:1");
+  assert.equal(picked[1]![0]!.callback_data, "model:m-two");
   assert.equal(picked[3]![0]!.text, "⚪ 默认 (跟随配置)");
   assert.equal(picked[3]![0]!.callback_data, "model:__default__");
 
@@ -281,19 +297,35 @@ test("renderModelsKeyboard with empty list still offers the default button", () 
   assert.equal(r[0]![0]!.callback_data, "model:__default__");
 });
 
-test("handleModels (no arg) replies with status + keyboard", async () => {
+test("renderModelsKeyboard falls back to index callback_data for very long ids", () => {
+  const longId = "x".repeat(70);
+  const r = rows(renderModelsKeyboard([longId], null));
+  assert.equal(r[0]![0]!.callback_data, "model:i:0", "70-char id cannot fit in 64-byte callback_data");
+});
+
+test("handleModels (no arg) replies with status + keyboard for the chat engine", async () => {
+  const { lister, calls } = mkLister(MODELS);
   const { ctx, sent } = mkCtx();
-  await handleModels(ctx, { claude: { models: MODELS } } as never, mkModelStore(null));
+  await handleModels(ctx, CFG, mkModelStore(null), lister as never);
+  assert.deepEqual(calls, ["claude"], "listes with the chat's engine");
   assert.equal(sent.length, 1);
   assert.match(sent[0]!.text, /模型选择/);
+  assert.match(sent[0]!.text, /当前引擎: claude/);
   assert.match(sent[0]!.text, /默认（不指定）/);
   assert.ok((sent[0]!.opts as { reply_markup?: unknown })?.reply_markup, "carries inline keyboard");
+});
+
+test("handleModels follows the per-chat engine override", async () => {
+  const { lister, calls } = mkLister(MODELS);
+  const { ctx } = mkCtx();
+  await handleModels(ctx, CFG, mkModelStore(null, true, "opencode"), lister as never);
+  assert.deepEqual(calls, ["opencode"]);
 });
 
 test("handleModels <id> sets the model on the binding", async () => {
   const store = mkModelStore(null);
   const { ctx, sent } = mkCtx({ match: "deepseek-v4-pro[1m]" });
-  await handleModels(ctx, { claude: { models: [] } } as never, store);
+  await handleModels(ctx, CFG, store, mkLister([]).lister as never);
   assert.equal(store.model, "deepseek-v4-pro[1m]", "model persisted");
   assert.equal(sent.length, 1);
   assert.match(sent[0]!.text, /deepseek-v4-pro\[1m\]/);
@@ -302,43 +334,51 @@ test("handleModels <id> sets the model on the binding", async () => {
 test("handleModels off/default clears the pick", async () => {
   const store = mkModelStore("m-two");
   const { ctx, sent } = mkCtx({ match: "off" });
-  await handleModels(ctx, { claude: { models: MODELS } } as never, store);
+  await handleModels(ctx, CFG, store, mkLister(MODELS).lister as never);
   assert.equal(store.model, null);
   assert.match(sent[0]!.text, /默认（不指定）/);
   const { ctx: ctx2 } = mkCtx({ match: "默认" });
-  await handleModels(ctx2, { claude: { models: MODELS } } as never, store);
+  await handleModels(ctx2, CFG, store, mkLister(MODELS).lister as never);
   assert.equal(store.model, null);
 });
 
 test("handleModels <id> without a bound project refuses", async () => {
   const store = mkModelStore(null, false);
   const { ctx, sent } = mkCtx({ match: "m-two" });
-  await handleModels(ctx, { claude: { models: MODELS } } as never, store);
+  await handleModels(ctx, CFG, store, mkLister(MODELS).lister as never);
   assert.match(sent[0]!.text, /\/projects/);
 });
 
-test("handleModelCallback selects by index, edits status, answers", async () => {
+test("handleModelCallback embedded id sets the model, edits status, answers", async () => {
   const store = mkModelStore(null);
-  const { ctx, edited, answered } = mkCtx({ callbackQuery: { data: "model:2" } });
-  await handleModelCallback(ctx, { claude: { models: MODELS } } as never, store);
+  const { ctx, edited, answered } = mkCtx({ callbackQuery: { data: "model:org/m-three" } });
+  await handleModelCallback(ctx, CFG, store, mkLister(MODELS).lister as never);
   assert.equal(store.model, "org/m-three", "model persisted");
   assert.equal(edited.length, 1, "status message refreshed");
   assert.match(edited[0]!.text, /org\/m-three/);
   assert.equal((answered[0] as { text?: string })?.text, "已切换为 org/m-three");
 });
 
+test("handleModelCallback index form resolves against the refetched list", async () => {
+  const store = mkModelStore(null);
+  const { ctx, answered } = mkCtx({ callbackQuery: { data: "model:i:2" } });
+  await handleModelCallback(ctx, CFG, store, mkLister(MODELS).lister as never);
+  assert.equal(store.model, "org/m-three");
+  assert.equal((answered[0] as { text?: string })?.text, "已切换为 org/m-three");
+});
+
 test("handleModelCallback default clears the pick", async () => {
   const store = mkModelStore("m-two");
   const { ctx, answered } = mkCtx({ callbackQuery: { data: "model:__default__" } });
-  await handleModelCallback(ctx, { claude: { models: MODELS } } as never, store);
+  await handleModelCallback(ctx, CFG, store, mkLister(MODELS).lister as never);
   assert.equal(store.model, null);
   assert.equal((answered[0] as { text?: string })?.text, "已恢复默认");
 });
 
 test("handleModelCallback with a stale index answers gracefully and changes nothing", async () => {
   const store = mkModelStore("m-two");
-  const { ctx, edited, answered } = mkCtx({ callbackQuery: { data: "model:9" } });
-  await handleModelCallback(ctx, { claude: { models: MODELS } } as never, store);
+  const { ctx, edited, answered } = mkCtx({ callbackQuery: { data: "model:i:9" } });
+  await handleModelCallback(ctx, CFG, store, mkLister(MODELS).lister as never);
   assert.equal(store.model, "m-two", "model unchanged");
   assert.equal(edited.length, 0, "no edit on stale index");
   assert.equal((answered[0] as { text?: string })?.text, "该选项已失效，请重新 /models");
@@ -346,8 +386,79 @@ test("handleModelCallback with a stale index answers gracefully and changes noth
 
 test("handleModelCallback refuses when no project is bound", async () => {
   const store = mkModelStore(null, false);
-  const { ctx, answered } = mkCtx({ callbackQuery: { data: "model:0" } });
-  await handleModelCallback(ctx, { claude: { models: MODELS } } as never, store);
+  const { ctx, answered } = mkCtx({ callbackQuery: { data: "model:m-two" } });
+  await handleModelCallback(ctx, CFG, store, mkLister(MODELS).lister as never);
   assert.equal(store.model, null);
   assert.equal((answered[0] as { text?: string })?.text, "请先 /projects 选择项目");
 });
+
+
+// ── /bot lifecycle control ──────────────────────────────────────────────
+
+test("/bot with no/invalid arg replies usage", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /用法/);
+  assert.match(sent[0]!.text, /restart/);
+});
+
+test("/bot status reports running state as HTML", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx, "status");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /CoBot 状态/);
+  assert.match(sent[0]!.text, /运行状态/);
+  assert.equal((sent[0]!.opts as { parse_mode?: string })?.parse_mode, "HTML");
+});
+
+test("/bot restart replies an ack without blocking (fire-and-forget)", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx, "restart");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /正在重启/);
+});
+
+test("/bot restart --watch announces hot-reload mode", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx, "restart --watch");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /正在重启/);
+  assert.match(sent[0]!.text, /热重载模式/);
+});
+
+test("/bot restart --no-watch announces plain mode", async () => {
+  const { ctx, sent } = mkCtx();
+  await handleBot(ctx, "restart --no-watch");
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /普通模式/);
+});
+
+test("/bot status shows hot-reload mode when COBOT_WATCH=1", async () => {
+  const prev = process.env.COBOT_WATCH;
+  process.env.COBOT_WATCH = "1";
+  try {
+    const { ctx, sent } = mkCtx();
+    await handleBot(ctx, "status");
+    assert.equal(sent.length, 1);
+    assert.match(sent[0]!.text, /启动模式/);
+    assert.match(sent[0]!.text, /热重载/);
+  } finally {
+    if (prev === undefined) delete process.env.COBOT_WATCH;
+    else process.env.COBOT_WATCH = prev;
+  }
+});
+
+// ── Action keyboard (persistent ReplyKeyboardMarkup) ─────────────────
+
+test("buildActionKeyboard renders 2 rows of 3 English buttons without approval", () => {
+  const kb = buildActionKeyboard();
+  const raw = (kb as unknown as { keyboard: { text: string }[][] }).keyboard;
+  assert.equal(raw.length, 2, "must have exactly 2 rows");
+  assert.deepEqual(raw[0]!.map((b) => b.text), ["Projects", "Sessions", "New"]);
+  assert.deepEqual(raw[1]!.map((b) => b.text), ["Stop", "Queue", "Tasks"]);
+  const allTexts = raw.flat().map((b) => b.text);
+  assert.ok(!allTexts.includes("审批"), "should not contain 审批");
+  assert.ok(!allTexts.includes("Approve"), "should not contain Approve");
+});
+

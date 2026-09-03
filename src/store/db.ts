@@ -5,15 +5,19 @@ import { randomUUID } from "node:crypto";
 import type { Database as DB } from "better-sqlite3";
 import { logger } from "../util/logger.js";
 
+export type EngineBackend = "claude" | "opencode";
+
 export interface Binding {
   chatId: number;
   projectPath: string;
-  /** Active Claude Code session UUID for this chat (null = fresh next run). */
+  /** Active session UUID for this chat (null = fresh next run). */
   sessionId: string | null;
   /** Per-chat tool-approval mode (null = use config default). */
   approvalMode: ApprovalMode | null;
   /** Per-chat model override chosen via /models (null = follow config default). */
   model: string | null;
+  /** Per-chat engine backend override (null = follow config default). */
+  engine: EngineBackend | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -78,7 +82,7 @@ export interface NextAction {
   createdAt: number;
 }
 
-/** Immutable record of one Claude Code task, for audit and cost accounting. */
+/** Immutable record of one Claude Code / OpenCode task, for audit and cost accounting. */
 export interface AuditLog {
   id: string;
   chatId: number;
@@ -92,6 +96,7 @@ export interface AuditLog {
   inputTokens: number | null;
   outputTokens: number | null;
   contextUsagePct: number | null;
+  engine?: string | null;
   startedAt: number;
   endedAt: number | null;
 }
@@ -103,6 +108,7 @@ CREATE TABLE IF NOT EXISTS bindings (
   session_id TEXT,
   approval_mode TEXT,
   model TEXT,
+  engine TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -153,6 +159,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   input_tokens INTEGER,
   output_tokens INTEGER,
   context_usage_pct REAL,
+  engine       TEXT,
   started_at   INTEGER NOT NULL,
   ended_at     INTEGER
 );
@@ -193,6 +200,13 @@ function migrate(db: DB): void {
   if (!cols.some((c) => c.name === "model")) {
     db.exec("ALTER TABLE bindings ADD COLUMN model TEXT");
   }
+  if (!cols.some((c) => c.name === "engine")) {
+    db.exec("ALTER TABLE bindings ADD COLUMN engine TEXT");
+  }
+  const auditCols = db.prepare("PRAGMA table_info(audit_logs)").all() as { name: string }[];
+  if (!auditCols.some((c) => c.name === "engine")) {
+    db.exec("ALTER TABLE audit_logs ADD COLUMN engine TEXT");
+  }
   const tableNames = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
   if (!tableNames.some((t) => t.name === "trace_events")) {
     db.exec(
@@ -223,9 +237,9 @@ export class Store {
   // ---- bindings ----
   getBinding(chatId: number): Binding | undefined {
     const r = this.db
-      .prepare("SELECT chat_id, project_path, session_id, approval_mode, model, created_at, updated_at FROM bindings WHERE chat_id = ?")
+      .prepare("SELECT chat_id, project_path, session_id, approval_mode, model, engine, created_at, updated_at FROM bindings WHERE chat_id = ?")
       .get(chatId) as
-      | { chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; model: string | null; created_at: number; updated_at: number }
+      | { chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; model: string | null; engine: string | null; created_at: number; updated_at: number }
       | undefined;
     if (!r) return undefined;
     return {
@@ -234,6 +248,7 @@ export class Store {
       sessionId: r.session_id,
       approvalMode: (r.approval_mode as ApprovalMode | null) ?? null,
       model: r.model ?? null,
+      engine: (r.engine as EngineBackend | null) ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };
@@ -264,6 +279,12 @@ export class Store {
    *  Takes effect on the next dispatched task; the binding must already exist. */
   setModel(chatId: number, model: string | null): void {
     this.db.prepare("UPDATE bindings SET model = ?, updated_at = ? WHERE chat_id = ?").run(model, Date.now(), chatId);
+  }
+
+  /** Set the per-chat engine backend override (null = clear it, follow config default).
+   *  Takes effect on the next dispatched task; the binding must already exist. */
+  setEngine(chatId: number, engine: EngineBackend | null): void {
+    this.db.prepare("UPDATE bindings SET engine = ?, updated_at = ? WHERE chat_id = ?").run(engine, Date.now(), chatId);
   }
 
   clearBinding(chatId: number): void {
@@ -558,8 +579,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO audit_logs
-           (id, chat_id, session_id, prompt, tools, status, cost_usd, duration_ms, input_tokens, output_tokens, context_usage_pct, started_at, ended_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, chat_id, session_id, prompt, tools, status, cost_usd, duration_ms, input_tokens, output_tokens, context_usage_pct, engine, started_at, ended_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         log.id,
@@ -573,6 +594,7 @@ export class Store {
         log.inputTokens,
         log.outputTokens,
         log.contextUsagePct,
+        log.engine ?? null,
         log.startedAt,
         log.endedAt,
       );
@@ -614,6 +636,7 @@ export class Store {
       inputTokens: (r.input_tokens as number | null) ?? null,
       outputTokens: (r.output_tokens as number | null) ?? null,
       contextUsagePct: (r.context_usage_pct as number | null) ?? null,
+      engine: (r.engine as string | null) ?? null,
       startedAt: r.started_at as number,
       endedAt: (r.ended_at as number | null) ?? null,
     }));
@@ -653,14 +676,15 @@ export class Store {
 
   listAllBindings(): Binding[] {
     const rows = this.db
-      .prepare("SELECT chat_id, project_path, session_id, approval_mode, model, created_at, updated_at FROM bindings ORDER BY updated_at DESC")
-      .all() as Array<{ chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; model: string | null; created_at: number; updated_at: number }>;
+      .prepare("SELECT chat_id, project_path, session_id, approval_mode, model, engine, created_at, updated_at FROM bindings ORDER BY updated_at DESC")
+      .all() as Array<{ chat_id: number; project_path: string; session_id: string | null; approval_mode: string | null; model: string | null; engine: string | null; created_at: number; updated_at: number }>;
     return rows.map((r) => ({
       chatId: r.chat_id,
       projectPath: r.project_path,
       sessionId: r.session_id,
       approvalMode: (r.approval_mode as ApprovalMode | null) ?? null,
       model: r.model ?? null,
+      engine: (r.engine as EngineBackend | null) ?? null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     }));
@@ -683,6 +707,7 @@ export class Store {
       inputTokens: (r.input_tokens as number | null) ?? null,
       outputTokens: (r.output_tokens as number | null) ?? null,
       contextUsagePct: (r.context_usage_pct as number | null) ?? null,
+      engine: (r.engine as string | null) ?? null,
       startedAt: r.started_at as number,
       endedAt: (r.ended_at as number | null) ?? null,
     }));

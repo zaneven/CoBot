@@ -12,11 +12,17 @@ function makeConfig(port: number): Config {
   return {
     telegramToken: "dummy",
     allowedUsers: new Set([123]),
+    backend: "claude",
     claude: {
       permissionMode: "acceptEdits",
       allowDangerousSkip: false,
       taskTimeoutMs: 600000,
       models: [],
+    },
+    opencode: {
+      models: [],
+      autoApprove: true,
+      timeoutMs: 600000,
     },
     admin: {
       enabled: true,

@@ -48,9 +48,21 @@ export interface AdminConfig {
   apiKey: string;
 }
 
+export type EngineBackend = "claude" | "opencode";
+
+export interface OpenCodeConfig {
+  path?: string;
+  model?: string;
+  models: string[];
+  agent?: string;
+  autoApprove: boolean;
+  timeoutMs: number;
+}
+
 export interface Config {
   telegramToken: string;
   allowedUsers: Set<number>;
+  backend: EngineBackend;
   claude: {
     model?: string;
     /** Pick list offered as buttons by /models. Empty list = only the "default"
@@ -85,6 +97,7 @@ export interface Config {
     /** Interactive tool-approval settings. Omit to keep headless auto-approve. */
     approval?: ApprovalConfig;
   };
+  opencode: OpenCodeConfig;
   admin: AdminConfig;
   dbPath: string;
   projects: string[];
@@ -100,9 +113,18 @@ export interface Config {
 }
 
 export interface YamlConfig {
+  backend?: EngineBackend;
   projects?: string[];
   devRoots?: string[];
   defaults?: { model?: string; models?: string[]; maxTurns?: number; taskTimeoutMs?: number; dailyCostCapUsd?: number; dailyTokenCap?: number; showTraceText?: boolean };
+  opencode?: {
+    path?: string;
+    model?: string;
+    models?: string[];
+    agent?: string;
+    autoApprove?: boolean;
+    timeoutMs?: number;
+  };
   telegram?: {
     botToken?: string;
     allowedUsers?: number[] | string;
@@ -133,6 +155,9 @@ export function saveYamlConfig(updates: Partial<YamlConfig>, configPath = resolv
 
   if (updates.defaults || currentYaml.defaults) {
     merged.defaults = { ...currentYaml.defaults, ...updates.defaults };
+  }
+  if (updates.opencode || currentYaml.opencode) {
+    merged.opencode = { ...currentYaml.opencode, ...updates.opencode };
   }
   if (updates.telegram || currentYaml.telegram) {
     merged.telegram = { ...currentYaml.telegram, ...updates.telegram };
@@ -308,9 +333,22 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
     apiKey: envStr("COBOT_ADMIN_API_KEY") ?? yaml.admin?.apiKey ?? "",
   };
 
+  const backendRaw = (process.env.COBOT_BACKEND ?? yaml.backend ?? "claude").toLowerCase();
+  const backend: EngineBackend = backendRaw === "opencode" ? "opencode" : "claude";
+
+  const opencode: OpenCodeConfig = {
+    path: envStr("OPENCODE_PATH") ?? yaml.opencode?.path,
+    model: envStr("OPENCODE_MODEL") ?? yaml.opencode?.model,
+    models: envList("OPENCODE_MODELS") ?? yaml.opencode?.models ?? [],
+    agent: envStr("OPENCODE_AGENT") ?? yaml.opencode?.agent,
+    autoApprove: (process.env.OPENCODE_AUTO_APPROVE ?? (yaml.opencode?.autoApprove ?? true).toString()) === "true",
+    timeoutMs: Number(process.env.OPENCODE_TASK_TIMEOUT_MS ?? yaml.opencode?.timeoutMs ?? taskTimeoutMs),
+  };
+
   return {
     telegramToken: token,
     allowedUsers,
+    backend,
     claude: {
       model: process.env.CLAUDE_MODEL ?? yaml.defaults?.model,
       models: envList("CLAUDE_MODELS") ?? yaml.defaults?.models ?? [],
@@ -328,6 +366,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
       showTraceText: yaml.defaults?.showTraceText ?? false,
       approval,
     },
+    opencode,
     admin,
     dbPath: process.env.COBOT_DB_PATH ?? resolve(process.cwd(), "data/cobot.db"),
     projects: (yaml.projects ?? []).map((p) => resolve(p)),
