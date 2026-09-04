@@ -48,7 +48,7 @@ export interface AdminConfig {
   apiKey: string;
 }
 
-export type EngineBackend = "claude" | "opencode";
+export type EngineBackend = "claude" | "opencode" | "agy";
 
 export interface OpenCodeConfig {
   path?: string;
@@ -57,6 +57,16 @@ export interface OpenCodeConfig {
   agent?: string;
   autoApprove: boolean;
   timeoutMs: number;
+}
+
+export interface AGyConfig {
+  path?: string;        // AGY_PATH
+  model?: string;       // AGY_MODEL
+  models: string[];     // AGY_MODELS
+  agent?: string;       // AGY_AGENT
+  effort?: string;      // AGY_EFFORT (low|medium|high)
+  autoApprove: boolean; // AGY_AUTO_APPROVE
+  timeoutMs: number;    // AGY_TASK_TIMEOUT_MS
 }
 
 export interface Config {
@@ -98,6 +108,7 @@ export interface Config {
     approval?: ApprovalConfig;
   };
   opencode: OpenCodeConfig;
+  agy: AGyConfig;
   admin: AdminConfig;
   dbPath: string;
   projects: string[];
@@ -122,6 +133,15 @@ export interface YamlConfig {
     model?: string;
     models?: string[];
     agent?: string;
+    autoApprove?: boolean;
+    timeoutMs?: number;
+  };
+  agy?: {
+    path?: string;
+    model?: string;
+    models?: string[];
+    agent?: string;
+    effort?: string;
     autoApprove?: boolean;
     timeoutMs?: number;
   };
@@ -334,7 +354,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
   };
 
   const backendRaw = (process.env.COBOT_BACKEND ?? yaml.backend ?? "claude").toLowerCase();
-  const backend: EngineBackend = backendRaw === "opencode" ? "opencode" : "claude";
+  const backend: EngineBackend = backendRaw === "opencode" ? "opencode" : backendRaw === "agy" ? "agy" : "claude";
 
   const opencode: OpenCodeConfig = {
     path: envStr("OPENCODE_PATH") ?? yaml.opencode?.path,
@@ -343,6 +363,16 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
     agent: envStr("OPENCODE_AGENT") ?? yaml.opencode?.agent,
     autoApprove: (process.env.OPENCODE_AUTO_APPROVE ?? (yaml.opencode?.autoApprove ?? true).toString()) === "true",
     timeoutMs: Number(process.env.OPENCODE_TASK_TIMEOUT_MS ?? yaml.opencode?.timeoutMs ?? taskTimeoutMs),
+  };
+
+  const agy: AGyConfig = {
+    path: envStr("AGY_PATH") ?? yaml.agy?.path,
+    model: envStr("AGY_MODEL") ?? yaml.agy?.model,
+    models: envList("AGY_MODELS") ?? yaml.agy?.models ?? [],
+    agent: envStr("AGY_AGENT") ?? yaml.agy?.agent,
+    effort: envStr("AGY_EFFORT") ?? yaml.agy?.effort,
+    autoApprove: (process.env.AGY_AUTO_APPROVE ?? (yaml.agy?.autoApprove ?? true).toString()) === "true",
+    timeoutMs: Number(process.env.AGY_TASK_TIMEOUT_MS ?? yaml.agy?.timeoutMs ?? taskTimeoutMs),
   };
 
   return {
@@ -367,6 +397,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
       approval,
     },
     opencode,
+    agy,
     admin,
     dbPath: process.env.COBOT_DB_PATH ?? resolve(process.cwd(), "data/cobot.db"),
     projects: (yaml.projects ?? []).map((p) => resolve(p)),

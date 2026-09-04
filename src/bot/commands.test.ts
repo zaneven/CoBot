@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { InlineKeyboard, Context } from "grammy";
-import { renderProjectsKeyboard, renderApprovalKeyboard, handleApprove, handleApproveModeCallback, handleBot, buildActionKeyboard, renderModelsKeyboard, handleModels, handleModelCallback } from "./commands.js";
+import { renderProjectsKeyboard, renderApprovalKeyboard, handleApprove, handleApproveModeCallback, handleBot, buildActionKeyboard, renderModelsKeyboard, handleModels, handleModelCallback, renderEngineKeyboard, handleEngine, handleEngineCallback } from "./commands.js";
 
 // grammY's InlineKeyboard instance carries the built grid on `.inline_keyboard`.
 type Button = { text?: string; callback_data?: string };
@@ -461,4 +461,60 @@ test("buildActionKeyboard renders 2 rows of 3 English buttons without approval",
   assert.ok(!allTexts.includes("审批"), "should not contain 审批");
   assert.ok(!allTexts.includes("Approve"), "should not contain Approve");
 });
+
+// ── /engine — switch backend agent engine ────────────────────────────
+
+test("renderEngineKeyboard marks active engine including agy", () => {
+  const rClaude = rows(renderEngineKeyboard("claude", "claude"));
+  assert.ok(rClaude[0]![0]!.text?.includes("✅"));
+  assert.ok(!rClaude[2]![0]!.text?.includes("✅"));
+
+  const rAGy = rows(renderEngineKeyboard("agy", "claude"));
+  assert.ok(!rAGy[0]![0]!.text?.includes("✅"));
+  assert.ok(rAGy[2]![0]!.text?.includes("✅ Antigravity CLI"));
+  assert.equal(rAGy[2]![0]!.callback_data, "engine:agy");
+
+  const rDefault = rows(renderEngineKeyboard(null, "claude"));
+  assert.ok(rDefault[3]![0]!.text?.includes("● 跟随全局默认"));
+});
+
+test("handleEngine switches to agy and resets session", async () => {
+  let boundEngine: string | null = null;
+  let boundSession: string | null = "old-session";
+  const store = {
+    getBinding: () => ({ projectPath: "/p", engine: boundEngine }),
+    setEngine: (_chatId: number, e: any) => { boundEngine = e; },
+    setSessionId: (_chatId: number, s: any) => { boundSession = s; },
+  };
+  const { ctx, sent } = mkCtx({ match: "agy" });
+  await handleEngine(ctx, { backend: "claude" } as any, store as any);
+  assert.equal(boundEngine, "agy");
+  assert.equal(boundSession, null);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0]!.text, /当前驱动引擎: <b>agy<\/b>/);
+});
+
+test("handleEngineCallback switches to agy and answers query", async () => {
+  let boundEngine: string | null = null;
+  let boundSession: string | null = "old-session";
+  const store = {
+    getBinding: () => ({ projectPath: "/p", engine: boundEngine }),
+    setEngine: (_chatId: number, e: any) => { boundEngine = e; },
+    setSessionId: (_chatId: number, s: any) => { boundSession = s; },
+  };
+  let edited = false;
+  let answeredText: string | undefined;
+  const ctx = {
+    chat: { id: 123 },
+    callbackQuery: { data: "engine:agy" },
+    editMessageText: async () => { edited = true; },
+    answerCallbackQuery: async (opts?: { text?: string }) => { answeredText = opts?.text; },
+  };
+  await handleEngineCallback(ctx as any, { backend: "claude" } as any, store as any);
+  assert.equal(boundEngine, "agy");
+  assert.equal(boundSession, null);
+  assert.equal(edited, true);
+  assert.match(answeredText || "", /已切换到 agy/);
+});
+
 

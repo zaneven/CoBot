@@ -102,7 +102,7 @@ export type UserDialogResult =
 export interface RunParams {
   prompt: PromptInput;
   cwd: string;
-  backend?: "claude" | "opencode";
+  backend?: "claude" | "opencode" | "agy";
   /** Session UUID to resume. Omit to start a fresh session. */
   resume?: string;
   model?: string;
@@ -121,6 +121,12 @@ export interface RunParams {
   opencodePath?: string;
   /** Whether opencode auto-approves actions. */
   opencodeAutoApprove?: boolean;
+  /** Custom path to local Antigravity executable. */
+  agyPath?: string;
+  /** Whether agy auto-approves permissions (--dangerously-skip-permissions). */
+  agyAutoApprove?: boolean;
+  /** Reasoning effort for agy session (low|medium|high). */
+  agyEffort?: string;
   /** External abort signal (e.g. from /stop). */
   signal?: AbortSignal;
   /** Interactive tool-approval handler. When set, `canUseTool` delegates to it

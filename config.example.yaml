@@ -39,9 +39,9 @@ defaults:
   dailyTokenCap: 20000000 # example: 200k tokens per chat per day (undefined = no cap)
   showTraceText: true # true = include intermediate narration trace text blocks in the final reply
 
-# AI Engine backend ("claude" | "opencode"). Default is "claude".
+# AI Engine backend ("claude" | "opencode" | "agy"). Default is "claude".
 # Override per-chat at runtime with /engine.
-# env: COBOT_BACKEND=claude | opencode
+# env: COBOT_BACKEND=claude | opencode | agy
 backend: claude
 
 # OpenCode engine configuration (when backend is opencode or chosen via /engine).
@@ -51,6 +51,15 @@ opencode:
   # agent: "coder"                     # default agent (env: OPENCODE_AGENT)
   autoApprove: true                    # auto-approve permissions (env: OPENCODE_AUTO_APPROVE)
   timeoutMs: 600000                    # task timeout in ms
+
+# Antigravity CLI (agy) engine configuration (when backend is agy or chosen via /engine).
+agy:
+  # path: "/opt/homebrew/bin/agy"  # custom agy binary path (env: AGY_PATH)
+  # model: "gemini-3.8-flash-high" # default model for agy (env: AGY_MODEL)
+  # agent: "coder"                 # default agent (env: AGY_AGENT)
+  # effort: "high"                 # reasoning effort: low|medium|high (env: AGY_EFFORT)
+  autoApprove: true                  # auto-approve permissions (env: AGY_AUTO_APPROVE)
+  timeoutMs: 600000                  # task timeout in ms
 
 # Built-in Web Admin Panel configuration
 admin:

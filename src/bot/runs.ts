@@ -85,7 +85,7 @@ export interface RunOutcome {
 export function resolveEngineModel(store: Store, config: Config, chatId: number): { engine: Config["backend"]; model: string | undefined } {
   const binding = store.getBinding(chatId);
   const engine = binding?.engine ?? config.backend;
-  const model = binding?.model ?? (engine === "opencode" ? config.opencode?.model : config.claude.model);
+  const model = binding?.model ?? (engine === "opencode" ? config.opencode?.model : engine === "agy" ? config.agy?.model : config.claude.model);
   return { engine, model };
 }
 
@@ -275,10 +275,13 @@ export async function runTurn(opts: {
           config.claude.permissionMode === "bypassPermissions" && config.claude.allowDangerousSkip,
         maxTurns: config.claude.maxTurns,
         signal: abortSignal,
-        timeoutMs: engine === "opencode" ? (config.opencode?.timeoutMs ?? config.claude.taskTimeoutMs) : config.claude.taskTimeoutMs,
-        opencodePath: config.opencode?.path,
-        opencodeAutoApprove: config.opencode?.autoApprove,
-        agent: config.opencode?.agent,
+         timeoutMs: engine === "opencode" ? (config.opencode?.timeoutMs ?? config.claude.taskTimeoutMs) : engine === "agy" ? (config.agy?.timeoutMs ?? config.claude.taskTimeoutMs) : config.claude.taskTimeoutMs,
+         opencodePath: config.opencode?.path,
+         opencodeAutoApprove: config.opencode?.autoApprove,
+         agent: engine === "opencode" ? config.opencode?.agent : engine === "agy" ? config.agy?.agent : undefined,
+         agyPath: config.agy?.path,
+         agyAutoApprove: config.agy?.autoApprove,
+         agyEffort: config.agy?.effort,
         canUseToolHandler,
         userDialogHandler,
       })) {

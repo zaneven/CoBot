@@ -7,6 +7,9 @@ import { listClaudeModels, type SwitchableModels } from "../claude/models.js";
 import { runOpenCode } from "../opencode/driver.js";
 import { listOpenCodeSessions, findOpenCodeSession } from "../opencode/sessions.js";
 import { listOpenCodeModels } from "../opencode/models.js";
+import { runAGy } from "../agy/driver.js";
+import { listAGySessions, findAGySession } from "../agy/sessions.js";
+import { listAGyModels } from "../agy/models.js";
 import { logger } from "../util/logger.js";
 
 export async function* runAgent(params: RunParams, backend: EngineBackend = "claude"): AsyncGenerator<DriverEvent> {
@@ -15,6 +18,8 @@ export async function* runAgent(params: RunParams, backend: EngineBackend = "cla
 
   if (chosenBackend === "opencode") {
     yield* runOpenCode(params);
+  } else if (chosenBackend === "agy") {
+    yield* runAGy(params);
   } else {
     yield* runClaude(params);
   }
@@ -28,6 +33,9 @@ export async function listAgentSessions(
   if (backend === "opencode") {
     return listOpenCodeSessions(dir, limit);
   }
+  if (backend === "agy") {
+    return listAGySessions(dir, limit);
+  }
   return listProjectSessions(dir, limit);
 }
 
@@ -38,6 +46,9 @@ export async function listAllAgentSessions(
   if (backend === "opencode") {
     return listOpenCodeSessions(undefined, limit);
   }
+  if (backend === "agy") {
+    return listAGySessions(undefined, limit);
+  }
   return listAllSessions(limit);
 }
 
@@ -47,6 +58,9 @@ export async function findAgentSession(
 ): Promise<SessionInfo | undefined> {
   if (backend === "opencode") {
     return findOpenCodeSession(sessionId);
+  }
+  if (backend === "agy") {
+    return findAGySession(sessionId);
   }
   return findClaudeSession(sessionId);
 }
@@ -62,6 +76,9 @@ export async function listAgentModels(
 ): Promise<SwitchableModels> {
   if (backend === "opencode") {
     return listOpenCodeModels(config);
+  }
+  if (backend === "agy") {
+    return listAGyModels(config);
   }
   return listClaudeModels(config);
 }

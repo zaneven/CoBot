@@ -304,15 +304,31 @@
     }
 
     table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.86rem; }
-    /* Wrap wide tables so the "操作" column is never pushed off-screen:
-       long content gets a horizontal scrollbar instead of overflowing the
-       panel. min-width keeps column ratios sensible on wide viewports. */
+    /* Tables scroll horizontally instead of squeezing fields: every column
+       is allowed its natural content width (white-space:nowrap), and the
+       viewport scrolls when the table is wider than the panel. Long-text
+       columns (.col-wrap) wrap inside a generous band so they neither
+       starve neighbours nor stretch the table absurdly. */
     .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .table-scroll table { min-width: 760px; }
+    .table-scroll table { min-width: 100%; }
     .table-scroll td, .table-scroll th { white-space: nowrap; }
-    /* Columns that may hold long text: let them wrap/shrink so they don't
-       starve the action column. Apply via .col-wrap on the <td>/<th>. */
-    .table-scroll .col-wrap { white-space: normal; word-break: break-word; max-width: 320px; }
+    .table-scroll .col-wrap { white-space: normal; word-break: break-word; max-width: 360px; min-width: 180px; }
+    /* Sticky right-most action column: stays pinned while the table is
+       scrolled sideways so the 操作 buttons are always reachable. Opaque
+       backgrounds are mandatory — otherwise scrolled content bleeds
+       through the pinned cell. */
+    .table-scroll th.col-action,
+    .table-scroll td.col-action {
+      position: sticky;
+      right: 0;
+      background: var(--panel-bg);
+      border-left: 1px solid var(--border-strong);
+      white-space: nowrap;
+      z-index: 2;
+    }
+    .table-scroll th.col-action { background: var(--bg-2); }
+    .table-scroll td.col-action { box-shadow: -6px 0 10px -6px rgba(0, 0, 0, 0.45); }
+    tbody tr:hover td.col-action { background: #16202C; }
     th {
       padding: 0.7rem 1.3rem;
       background: transparent;
@@ -464,9 +480,21 @@
       width: 90%;
       max-width: 720px;
       max-height: 85vh;
-      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;            /* the single scrollbar lives in .modal-body */
       padding: 1.4rem;
       box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+    }
+    /* Pinned title bar — never scrolls. */
+    .modal-content > .modal-head { flex: 0 0 auto; }
+    /* The ONE scroll container for the whole dialog body. All inner content
+       (metadata, prompt, trace timeline) flows here; no nested scrollbars. */
+    .modal-content > .modal-body {
+      flex: 1 1 auto;
+      min-height: 0;               /* allow the flex child to shrink so its own overflow engages */
+      overflow-y: auto;
+      padding-right: 0.35rem;
     }
     .modal-content pre {
       background: var(--terminal-bg);
@@ -745,7 +773,7 @@
               <th class="col-wrap">引擎 / 模型</th>
               <th>耗时</th>
               <th class="col-wrap">当前动作</th>
-              <th>操作</th>
+              <th class="col-action">操作</th>
             </tr>
           </thead>
           <tbody id="activeTasksBody">
@@ -775,7 +803,7 @@
               <th class="col-wrap">工具使用</th>
               <th>Tokens</th>
               <th>Cost ($USD)</th>
-              <th>操作</th>
+              <th class="col-action">操作</th>
             </tr>
           </thead>
           <tbody id="auditLogsBody">
@@ -803,7 +831,7 @@
               <th class="col-wrap">Prompt</th>
               <th>启用状态</th>
               <th>最后执行时间</th>
-              <th>操作</th>
+              <th class="col-action">操作</th>
             </tr>
           </thead>
           <tbody id="cronBody">
@@ -855,11 +883,11 @@
               <th class="col-wrap">引擎 / 模型覆盖</th>
               <th>授权模式</th>
               <th>更新时间</th>
-              <th>操作</th>
+              <th class="col-action">操作</th>
             </tr>
           </thead>
           <tbody id="bindingsBody">
-            <tr><td colspan="6" style="text-align:center; color:var(--text-faint); font-family:var(--font-mono); padding:1.6rem;">加载中...</td></tr>
+            <tr><td colspan="7" style="text-align:center; color:var(--text-faint); font-family:var(--font-mono); padding:1.6rem;">加载中...</td></tr>
           </tbody>
         </table>
         </div>
@@ -877,7 +905,7 @@
               <th>Chat ID</th>
               <th class="col-wrap">信任工具名称</th>
               <th>添加时间</th>
-              <th>操作</th>
+              <th class="col-action">操作</th>
             </tr>
           </thead>
           <tbody id="rulesBody">
@@ -1014,11 +1042,11 @@
   <!-- Task Detail Modal (Phase 2) -->
   <div class="modal-overlay" id="auditDetailModal" role="dialog" aria-modal="true" aria-label="任务执行轨迹详情">
     <div class="modal-content">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; border-bottom:1px solid var(--border-color); padding-bottom:0.75rem;">
+      <div class="modal-head" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; border-bottom:1px solid var(--border-color); padding-bottom:0.75rem;">
         <h3 style="font-size:1rem;">任务执行轨迹详情</h3>
         <button class="btn btn-secondary" onclick="closeAuditModal()">关闭</button>
       </div>
-      <div id="modalBody">
+      <div id="modalBody" class="modal-body">
         <div style="color:var(--text-muted); font-family:var(--font-mono); font-size:0.8rem;">加载中...</div>
       </div>
     </div>
@@ -1027,11 +1055,11 @@
   <!-- Live (running) task trace modal: polls /admin/api/tasks/live-trace -->
   <div class="modal-overlay" id="liveTraceModal" role="dialog" aria-modal="true" aria-label="实时任务执行轨迹">
     <div class="modal-content">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; border-bottom:1px solid var(--border-color); padding-bottom:0.75rem;">
+      <div class="modal-head" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; border-bottom:1px solid var(--border-color); padding-bottom:0.75rem;">
         <h3 style="font-size:1rem;">实时任务执行轨迹 <span id="liveTraceStatus" style="font-size:0.78rem; color:var(--text-faint); margin-left:0.5rem;"></span></h3>
         <button class="btn btn-secondary" onclick="closeLiveTraceModal()">关闭</button>
       </div>
-      <div id="liveTraceBody">
+      <div id="liveTraceBody" class="modal-body">
         <div style="color:var(--text-muted); font-family:var(--font-mono); font-size:0.8rem;">连接中...</div>
       </div>
     </div>
@@ -1096,7 +1124,8 @@
     function engineLabel(e) {
       if (e === "claude") return "Claude Code";
       if (e === "opencode") return "OpenCode";
-      return e || "—";
+      if (e === "agy") return "Antigravity CLI";
+      return e || "默认";
     }
 
     /** Label for a model bucket: the fallback bucket from pre-multi-engine
@@ -1176,9 +1205,10 @@
             html += `<div style="margin-top:0.8rem; padding-top:0.6rem; border-top:1px solid var(--border-color); font-size:0.8rem;">任务已结束 · <span class="badge ${badge}">${t.status}</span> · 完整轨迹已转入下方审计日志</div>`;
           }
           body.innerHTML = html;
-          // Keep the most recent event in view as the stream grows.
-          const scroll = body.querySelector(".trace-scroll");
-          if (scroll) scroll.scrollTop = scroll.scrollHeight;
+          // Keep the most recent event in view as the stream grows. The
+          // modal body is now the single scroll container, so scroll it
+          // directly (the old .trace-scroll nested scrollbar was removed).
+          body.scrollTop = body.scrollHeight;
           statusEl.textContent = t.finished ? "· 已结束" : "· 实时";
           if (t.finished && liveTraceTimer) { clearInterval(liveTraceTimer); liveTraceTimer = null; }
         } catch (e) { /* ignore transient fetch errors; next tick retries */ }
@@ -1203,7 +1233,7 @@
       let html = `
             <div style="margin-top:0.5rem; border-top:1px solid var(--border-color); padding-top:0.8rem;">
               <strong style="display:block; margin-bottom:0.6rem;">详细执行轨迹 (${events.length} 个事件)</strong>
-              <div class="trace-scroll" style="display:flex; flex-direction:column; gap:0.4rem; max-height:500px; overflow-y:auto; padding-right:0.3rem;">
+              <div class="trace-scroll" style="display:flex; flex-direction:column; gap:0.4rem;">
           `;
       for (const ev of events) {
         let data = {};
@@ -1225,19 +1255,19 @@
             icon = "📥";
             color = "var(--info)";
             summary = data.name + (data.isError ? " (error)" : "");
-            detailLines = data.content ? `<pre style="margin-top:0.25rem; max-height:200px; overflow-y:auto; font-size:0.72rem; white-space:pre-wrap; word-break:break-all;">${escHtml(data.content)}</pre>` : "";
+            detailLines = data.content ? `<pre style="margin-top:0.25rem; font-size:0.72rem; white-space:pre-wrap; word-break:break-all;">${escHtml(data.content)}</pre>` : "";
             break;
           case "text":
             icon = "💬";
             color = "var(--success)";
             summary = (data.content || "").slice(0, 120) + ((data.content || "").length > 120 ? "..." : "");
-            detailLines = `<pre style="margin-top:0.25rem; max-height:200px; overflow-y:auto; font-size:0.72rem; white-space:pre-wrap; word-break:break-all;">${escHtml(data.content || "")}</pre>`;
+            detailLines = `<pre style="margin-top:0.25rem; font-size:0.72rem; white-space:pre-wrap; word-break:break-all;">${escHtml(data.content || "")}</pre>`;
             break;
           case "thinking":
             icon = "🤔";
             color = "var(--warning)";
             summary = (data.content || "").slice(0, 120) + ((data.content || "").length > 120 ? "..." : "");
-            detailLines = `<pre style="margin-top:0.25rem; max-height:150px; overflow-y:auto; font-size:0.72rem; white-space:pre-wrap; word-break:break-all; color:var(--warning);">${escHtml(data.content || "")}</pre>`;
+            detailLines = `<pre style="margin-top:0.25rem; font-size:0.72rem; white-space:pre-wrap; word-break:break-all; color:var(--warning);">${escHtml(data.content || "")}</pre>`;
             break;
           case "status":
             icon = "⚡";
@@ -1299,7 +1329,7 @@
             </div>
             <div>
               <strong>Prompt 内容:</strong>
-              <pre style="max-height:120px; overflow-y:auto;">${escHtml(audit.prompt)}</pre>
+              <pre>${escHtml(audit.prompt)}</pre>
             </div>
             <div>
               <strong>已调用的工具序列:</strong>
@@ -1570,7 +1600,7 @@
                 <td class="col-wrap" style="font-size:0.76rem;"><code>${escHtml(engineLabel(t.engine))}</code> · <code>${escHtml(t.model || '默认')}</code></td>
                 <td>${Math.floor((Date.now() - t.startedAt)/1000)}s</td>
                 <td class="col-wrap" style="color:var(--text-muted); font-size:0.78rem;">${t.narration ? escHtml(t.narration) : '—'}</td>
-                <td>
+                <td class="col-action">
                   <button class="btn btn-secondary" onclick="viewLiveTrace('${t.taskId}')">实时详情</button>
                   <button class="btn btn-danger" onclick="abortTask('${t.taskId}')">中断</button>
                 </td>
@@ -1596,7 +1626,7 @@
               <td class="col-wrap"><code>${l.tools}</code></td>
               <td>${(l.inputTokens || 0) + (l.outputTokens || 0)}</td>
               <td>$${(l.costUsd || 0).toFixed(4)}</td>
-              <td><button class="btn btn-secondary" onclick="viewAuditDetail('${l.id}')">查看轨迹</button></td>
+              <td class="col-action"><button class="btn btn-secondary" onclick="viewAuditDetail('${l.id}')">查看轨迹</button></td>
             </tr>
           `).join("");
         }
@@ -1616,7 +1646,7 @@
               <td class="col-wrap">${c.prompt}</td>
               <td><span class="badge ${c.enabled ? 'badge-done' : 'badge-aborted'}">${c.enabled ? '已启用' : '已禁用'}</span></td>
               <td>${formatTime(c.lastRunAt)}</td>
-              <td><button class="btn btn-primary" onclick="toggleCron('${c.id}', ${!c.enabled})">${c.enabled ? '禁用' : '启用'}</button></td>
+              <td class="col-action"><button class="btn btn-primary" onclick="toggleCron('${c.id}', ${!c.enabled})">${c.enabled ? '禁用' : '启用'}</button></td>
             </tr>
           `).join("");
         }
@@ -1640,7 +1670,7 @@
               </td>
               <td><span class="badge badge-running">${b.approvalMode || 'default'}</span></td>
               <td>${formatTime(b.updatedAt)}</td>
-              <td><button class="btn btn-danger" onclick="unbindChat(${b.chatId})">解绑</button></td>
+              <td class="col-action"><button class="btn btn-danger" onclick="unbindChat(${b.chatId})">解绑</button></td>
             </tr>
           `).join("");
 
@@ -1663,7 +1693,7 @@
               <td>${r.chatId}</td>
               <td class="col-wrap"><code>${r.toolName}</code></td>
               <td>${formatTime(r.createdAt)}</td>
-              <td><button class="btn btn-danger" onclick="deleteRule(${r.chatId}, '${r.toolName}')">撤销</button></td>
+              <td class="col-action"><button class="btn btn-danger" onclick="deleteRule(${r.chatId}, '${r.toolName}')">撤销</button></td>
             </tr>
           `).join("");
         }

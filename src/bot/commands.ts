@@ -30,7 +30,7 @@ export const BOT_COMMANDS: readonly BotCommandDef[] = [
   { command: "unbind", usage: "/unbind", description: "unbind this chat from its project" },
   { command: "new", usage: "/new", description: "start a fresh session" },
   { command: "auto", usage: "/auto [off]", description: "persistent auto session mode" },
-  { command: "engine", usage: "/engine [claude|opencode|default]", description: "switch backend agent engine" },
+  { command: "engine", usage: "/engine [claude|opencode|agy|default]", description: "switch backend agent engine" },
   { command: "sessions", usage: "/sessions [all]", description: "list agent sessions (tap to switch)" },
   { command: "switch", usage: "/switch <id>", description: "switch the active session by id" },
   { command: "stop", usage: "/stop", description: "interrupt the running task" },
@@ -533,11 +533,13 @@ export function renderEngineKeyboard(current: EngineBackend | null, globalDefaul
   const effective = current ?? globalDefault;
   const isClaude = effective === "claude";
   const isOpenCode = effective === "opencode";
+  const isAGy = effective === "agy";
   const isDefault = current === null;
 
   const kb = new InlineKeyboard();
   kb.text(`${isClaude ? "✅ " : ""}Claude Code`, `${ENGINE_CB_PREFIX}claude`).row();
   kb.text(`${isOpenCode ? "✅ " : ""}OpenCode`, `${ENGINE_CB_PREFIX}opencode`).row();
+  kb.text(`${isAGy ? "✅ " : ""}Antigravity CLI`, `${ENGINE_CB_PREFIX}agy`).row();
   kb.text(`${isDefault ? "● " : ""}跟随全局默认 (${globalDefault})`, `${ENGINE_CB_PREFIX}default`).row();
   return kb;
 }
@@ -578,7 +580,7 @@ export async function handleEngine(ctx: Context, config: Config, store: Store): 
     return;
   }
 
-  if (arg === "claude" || arg === "opencode") {
+  if (arg === "claude" || arg === "opencode" || arg === "agy") {
     store.setEngine(chatId, arg as EngineBackend);
     store.setSessionId(chatId, null);
     await ctx.reply(engineStatusText(arg as EngineBackend, config.backend), {
@@ -588,7 +590,7 @@ export async function handleEngine(ctx: Context, config: Config, store: Store): 
     return;
   }
 
-  await ctx.reply("用法: /engine [claude|opencode|default]");
+  await ctx.reply("用法: /engine [claude|opencode|agy|default]");
 }
 
 /** Callback for inline `engine:<engine>` buttons. */
@@ -610,7 +612,7 @@ export async function handleEngineCallback(ctx: Context, config: Config, store: 
 
   const target = data.slice(ENGINE_CB_PREFIX.length);
   let newEngine: EngineBackend | null = null;
-  if (target === "claude" || target === "opencode") {
+  if (target === "claude" || target === "opencode" || target === "agy") {
     newEngine = target as EngineBackend;
   }
 
@@ -932,7 +934,7 @@ export async function handleModels(
 /** The engine-specific config default a chat falls back to when it has no
  *  /models pick — mirrors runTurn's model resolution. */
 function engineDefaultModel(config: Config, engine: EngineBackend): string | undefined {
-  return engine === "opencode" ? config.opencode?.model : config.claude.model;
+  return engine === "opencode" ? config.opencode?.model : engine === "agy" ? config.agy?.model : config.claude.model;
 }
 
 /** Refresh an already-sent /models status message after a button tap. */

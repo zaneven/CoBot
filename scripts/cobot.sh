@@ -104,6 +104,37 @@ kill_all_cobot() {
   return 0
 }
 
+get_admin_url() {
+  local port=""
+  local host=""
+
+  # 1. Try to extract from recent startup logs
+  if [ -f "${LOG_FILE}" ]; then
+    port=$(tail -n 50 "${LOG_FILE}" 2>/dev/null | grep -E "Admin Web Server started" -A 4 | awk '/port:/ {print $2}' | tr -d '"\r' | tail -n 1)
+    host=$(tail -n 50 "${LOG_FILE}" 2>/dev/null | grep -E "Admin Web Server started" -A 4 | awk '/host:/ {print $2}' | tr -d '"\r' | tail -n 1)
+  fi
+
+  # 2. Fall back to environment variables
+  if [ -z "${port}" ]; then
+    port="${COBOT_ADMIN_PORT:-}"
+    host="${COBOT_ADMIN_HOST:-127.0.0.1}"
+  fi
+
+  # 3. Fall back to config.yaml
+  if [ -z "${port}" ] && [ -f "${ROOT_DIR}/config.yaml" ]; then
+    port=$(awk '/^admin:/,/^([a-zA-Z]|$)/ {if ($1 == "port:") print $2}' "${ROOT_DIR}/config.yaml" 2>/dev/null | head -n 1)
+    local yaml_host
+    yaml_host=$(awk '/^admin:/,/^([a-zA-Z]|$)/ {if ($1 == "host:") print $2}' "${ROOT_DIR}/config.yaml" 2>/dev/null | head -n 1)
+    [ -n "${yaml_host}" ] && host="${yaml_host}"
+  fi
+
+  port="${port:-8085}"
+  host="${host:-127.0.0.1}"
+  [ "${host}" = "0.0.0.0" ] && host="127.0.0.1"
+
+  echo "http://${host}:${port}"
+}
+
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 cmd_install() {
@@ -290,6 +321,7 @@ cmd_start() {
 
   if get_running_pids >/dev/null 2>&1; then
     echo "[+] CoBot is running and ready."
+    echo "[+] Admin: $(get_admin_url)"
   else
     echo "[!] CoBot failed to start. Check ${LOG_FILE} for errors."
     return 1
@@ -317,6 +349,7 @@ cmd_status() {
     else
       echo "[Proxy]:  Direct (None)"
     fi
+    echo "[Admin]:  $(get_admin_url)"
   else
     echo "[Status]: STOPPED"
   fi
