@@ -321,10 +321,6 @@ export async function runTurn(opts: {
             }
             // Accumulate text deltas for the trace; flush on tool boundaries and at the end.
             traceTextAccum += ev.delta;
-            if (traceTextAccum.length > 2000) {
-              flushTraceText();
-              pushTraceDisplay();
-            }
             break;
           case "thinking":
             indicator.activity();
@@ -788,9 +784,22 @@ export function shouldSendFinalAnswer(answer: string, lastRoundBody: string): bo
  * intermediate blocks (e.g. a single-round run), the summary is returned
  * unchanged so nothing is disturbed.
  */
+function isSummaryFragment(candidate: string, summary: string): boolean {
+  const c = candidate.trim();
+  const s = summary.trim();
+  if (!c || !s) return false;
+  if (c === s) return true;
+  // Candidate is a prefix of summary or identical to the beginning of summary
+  if (s.startsWith(c)) return true;
+  // If candidate is sufficiently long and summary starts with the bulk of it
+  if (c.length >= 30 && s.startsWith(c.slice(0, 30))) return true;
+  return false;
+}
+
 export function buildTraceReply(texts: string[], summary: string): string {
   const s = summary.trim();
-  const intermediate = texts.length > 1 ? texts.slice(0, -1) : [];
+  const intermediate = (texts.length > 1 ? texts.slice(0, -1) : [])
+    .filter((t) => !isSummaryFragment(t, s));
   const lists = intermediate
     .map((t) => toBulletList(t.trim()))
     .filter(Boolean);

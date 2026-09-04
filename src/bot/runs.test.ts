@@ -194,6 +194,21 @@ test("buildTraceReply: drops the trailing block that duplicates the summary and 
   assert.equal(out, "##【执行过程】\n\n> step one\n\n---\n\nfinal summary");
 });
 
+test("buildTraceReply: drops intermediate block if it is a prefix/fragment of the summary (regression: sliced answer bug)", () => {
+  const fullSummary = "本项目是 CoBot，一个通过 Telegram Bot 驱动本地 Claude Code / OpenCode / Antigravity CLI 的 AI Agent 协同开发助手。".repeat(30);
+  const chunk1 = fullSummary.slice(0, 2000);
+  const chunk2 = fullSummary.slice(2000);
+  const out = buildTraceReply([chunk1, chunk2], fullSummary);
+  assert.equal(out, fullSummary, "sliced answer prefix must not be treated as intermediate step or duplicated");
+});
+
+test("buildTraceReply: preserves legitimate intermediate steps while dropping summary fragments", () => {
+  const fullSummary = "这是最终的长篇总结内容，包含核心架构与实现。".repeat(20);
+  const chunk1 = fullSummary.slice(0, 100);
+  const out = buildTraceReply(["执行了 git status 检查", chunk1, "tail summary"], fullSummary);
+  assert.equal(out, `##【执行过程】\n\n> 执行了 git status 检查\n\n---\n\n${fullSummary}`);
+});
+
 // ── runTurn: aborted/timeout must notify (regression) ────────────────────────
 
 // Before the fix, a `done{aborted}` only set flags; the `attemptAborted` guard
