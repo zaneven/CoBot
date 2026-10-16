@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   parseAGyEvent,
   resolveAGyExecutable,
+  sanitizeAGyText,
+  AGyStreamSanitizer,
 } from "./driver.js";
 import { summarizeToolInput } from "../opencode/driver.js";
 
@@ -306,3 +308,114 @@ test("AGy driver: end-to-end real captured stream produces the right events in o
     "tool", "toolResult", "roundStart", "text", "text", "done",
   ]);
 });
+
+// ── Protocol Sanitization Tests ─────────────────────────────────────────────
+
+test("sanitizeAGyText: removes complete <SYSTEM_MESSAGE>...</SYSTEM_MESSAGE>} blocks", () => {
+  const input = "正在准备构建镜像...\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-09-17\nOutput: logs\n</SYSTEM_MESSAGE>}\n在另一台电脑上测试。";
+  const out = sanitizeAGyText(input);
+  assert.equal(out, "正在准备构建镜像...\n\n在另一台电脑上测试。");
+});
+
+test("sanitizeAGyText: handles task completion notice without open tag", () => {
+  const input = '[Message] timestamp=2026-09-17T03:07:31Z sender=task-187 priority=MESSAGE_PRIORITY_HIGH content=Task id "task-187" finished with result:\nThe command exited with code 0.\nTask output has been logged to: file:///task.log\n</SYSTEM_MESSAGE>}\n构建已完成。';
+  const out = sanitizeAGyText(input);
+  assert.equal(out, "构建已完成。");
+});
+
+test("sanitizeAGyText: handles real user reproduction snippet", () => {
+  const input = `正在重新编译优化并生成适配不同外设的 Release DMG 镜像... [Message] timestamp=2026-09-17T03:07:31Z sender=454c6561-f68a-433a-95b9-4e89695e10f6/task-187 priority=MESSAGE_PRIORITY_HIGH content=Task id "454c6561-f68a-433a-95b9-4e89695e10f6/task-187" finished with result:
+The command exited with code 0. Output: <truncated 82 lines>
+ExecuteExternalTool /Applications/Xcode.app/...
+BUILD SUCCEEDED
+created: /Users/a1/Develop/RollBar/dist/RollBar.dmg
+Task output has been logged to: file:///Users/a1/.gemini/antigravity-cli/brain/454c6561-f68a-433a-95b9-4e89695e10f6/.system_generated/tasks/task-187.log
+</SYSTEM_MESSAGE>}在另一台电脑上安装 DMG 后出现「中键拖拽不好使」，通常由权限引起。`;
+
+  const out = sanitizeAGyText(input);
+  assert.ok(!out.includes("<SYSTEM_MESSAGE>"));
+  assert.ok(!out.includes("</SYSTEM_MESSAGE"));
+  assert.ok(!out.includes("task-187"));
+  assert.ok(!out.includes("Task output has been logged to"));
+  assert.ok(out.includes("正在重新编译优化并生成适配不同外设的 Release DMG 镜像..."));
+  assert.ok(out.includes("在另一台电脑上安装 DMG 后出现「中键拖拽不好使」，通常由权限引起。"));
+});
+
+test("sanitizeAGyText: preserves clean text unchanged", () => {
+  const normal = "这是一个普通的回答，包含一些 `code` 和 [链接](https://example.com)。";
+  assert.equal(sanitizeAGyText(normal), normal);
+});
+
+test("AGyStreamSanitizer: hides <SYSTEM_MESSAGE> across chunk boundaries", () => {
+  const sanitizer = new AGyStreamSanitizer();
+  const chunks = [
+    "第一句话，",
+    "正在打包... <SYS",
+    "TEM_MESSAGE>",
+    "[Message] 内部日志内容",
+    " 还有更多日志 </SYS",
+    "TEM_MESSAGE>} 第二句话。",
+  ];
+
+  let output = "";
+  for (const chunk of chunks) {
+    output += sanitizer.feed(chunk);
+  }
+  output += sanitizer.flush();
+
+  assert.ok(!output.includes("<SYSTEM_MESSAGE>"));
+  assert.ok(!output.includes("内部日志内容"));
+  assert.ok(!output.includes("</SYSTEM_MESSAGE"));
+  assert.ok(output.includes("第一句话，"));
+  assert.ok(output.includes("正在打包... "));
+  assert.ok(output.includes("第二句话。"));
+});
+
+test("AGyStreamSanitizer: suppresses trailing unclosed system block on flush", () => {
+  const sanitizer = new AGyStreamSanitizer();
+  let output = sanitizer.feed("前文说明。\n<SYSTEM_MESSAGE>[Message] 还在运行，未闭合的日志...");
+  output += sanitizer.flush();
+
+  assert.equal(output.trim(), "前文说明。");
+});
+
+test("parseAGyEvent: cleans system message bleed from text_delta and result.response", () => {
+  const ctx = mkCtx();
+  const stepRes = parseAGyEvent(
+    {
+      event: "step_update",
+      step_update: {
+        step_index: 1,
+        state: "ACTIVE",
+        step_type: "agent_response",
+        text_delta: "正在生成... <SYSTEM_MESSAGE>[Message] task done</SYSTEM_MESSAGE>} 正文内容。",
+      },
+      conversation_id: "test-c1",
+    },
+    ctx,
+  );
+
+  const textEv = stepRes.driverEvents.find((e) => e.kind === "text");
+  assert.ok(textEv && textEv.kind === "text");
+  assert.ok(!textEv.delta.includes("<SYSTEM_MESSAGE>"));
+  assert.ok(!textEv.delta.includes("task done"));
+  assert.ok(textEv.delta.includes("正在生成..."));
+  assert.ok(textEv.delta.includes("正文内容。"));
+
+  const finishRes = parseAGyEvent(
+    {
+      event: "result",
+      result: {
+        status: "SUCCESS",
+        response: "<SYSTEM_MESSAGE>[Message] task done</SYSTEM_MESSAGE>} 最终总结交付。",
+      },
+      conversation_id: "test-c1",
+    },
+    ctx,
+  );
+
+  const doneEv = finishRes.driverEvents.find((e) => e.kind === "done");
+  assert.ok(doneEv && doneEv.kind === "done");
+  assert.equal(doneEv.text, "最终总结交付。");
+});
+

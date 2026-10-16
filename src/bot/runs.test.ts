@@ -2,7 +2,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { Store } from "../store/db.js";
 import { Registry } from "../registry/registry.js";
-import { submitInteractive, runTurn, runOne, resolveEngineModel, shouldSendFinalAnswer, buildTraceReply, isRetryableError, isCorruptedResumeError } from "./runs.js";
+import { submitInteractive, runTurn, runOne, resolveEngineModel, shouldSendFinalAnswer, buildTraceReply, isRetryableError, isCorruptedResumeError, isMachineLogNoise } from "./runs.js";
 import type { Config } from "../config.js";
 import type { PromptInput, DriverEvent } from "../claude/types.js";
 
@@ -208,6 +208,25 @@ test("buildTraceReply: preserves legitimate intermediate steps while dropping su
   const out = buildTraceReply(["执行了 git status 检查", chunk1, "tail summary"], fullSummary);
   assert.equal(out, `##【执行过程】\n\n> 执行了 git status 检查\n\n---\n\n${fullSummary}`);
 });
+
+test("isMachineLogNoise: identifies system message markers and compiler dumps", () => {
+  assert.equal(isMachineLogNoise("<SYSTEM_MESSAGE>[Message] timestamp=2026</SYSTEM_MESSAGE>"), true);
+  assert.equal(isMachineLogNoise("[Message] timestamp=2026-09-17 sender=task-187"), true);
+  assert.equal(isMachineLogNoise("ExecuteExternalTool ... BUILD SUCCEEDED"), true);
+  assert.equal(isMachineLogNoise("The command exited with code 0. Output: <truncated 82 lines>"), true);
+  assert.equal(isMachineLogNoise("正在重新编译优化并生成适配不同外设的 Release DMG 镜像..."), false);
+  assert.equal(isMachineLogNoise("已为您完成了 RollBar 的中键手势修复，请测试。"), false);
+});
+
+test("buildTraceReply: drops machine log noise from intermediate steps", () => {
+  const logNoise = `ExecuteExternalTool /Applications/Xcode.app/...
+ProcessProductPackaging /Users/a1/Library/Developer/...
+BUILD SUCCEEDED
+created: dist/RollBar.dmg`;
+  const out = buildTraceReply(["第一步：检查代码", logNoise, "最终交付"], "最终交付");
+  assert.equal(out, "##【执行过程】\n\n> 第一步：检查代码\n\n---\n\n最终交付");
+});
+
 
 // ── runTurn: aborted/timeout must notify (regression) ────────────────────────
 

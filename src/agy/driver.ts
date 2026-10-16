@@ -23,13 +23,174 @@ export function resolveAGyExecutable(customPath?: string): string {
   return "agy";
 }
 
-interface ParseContext {
+/**
+ * Strip AGy internal protocol injection tags, system message wrappers, and
+ * background task completion logs from full strings or terminal result responses.
+ */
+export function sanitizeAGyText(text: string): string {
+  if (!text) return "";
+  let clean = text;
+
+  // 1. Closed <SYSTEM_MESSAGE> ... </SYSTEM_MESSAGE>} blocks (including trailing '}')
+  clean = clean.replace(/<SYSTEM_MESSAGE>[\s\S]*?<\/SYSTEM_MESSAGE>}?/gi, "");
+
+  // 2. Unclosed or missing open-tag task finish notices:
+  //    [Message] timestamp=... content=Task id "..." finished with result:...
+  clean = clean.replace(
+    /\[Message\]\s+timestamp=[\s\S]*?content=Task id\s+["'][^"']+["']\s+finished with result:[\s\S]*?(?:(?:Task output has been logged to:|Log:)[^\n]*(?:\n|<\/SYSTEM_MESSAGE>}?)?)/gi,
+    "",
+  );
+
+  // 3. Any leftover [Message] block terminated by </SYSTEM_MESSAGE>}
+  clean = clean.replace(/\[Message\]\s+timestamp=[\s\S]*?<\/SYSTEM_MESSAGE>}?/gi, "");
+
+  // 4. Trailing unclosed <SYSTEM_MESSAGE> tag and everything after it
+  clean = clean.replace(/<SYSTEM_MESSAGE>[\s\S]*$/gi, "");
+
+  // 5. Stray orphan tags or brackets
+  clean = clean.replace(/<\/?SYSTEM_MESSAGE>}?/gi, "");
+
+  // 6. Tidy multiple blank lines and trailing spaces
+  return clean.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Streaming sanitizer that hides AGy internal protocol messages from the live token stream.
+ */
+export class AGyStreamSanitizer {
+  private buffer = "";
+  private inSystemBlock = false;
+
+  private static readonly OPEN_TAG = "<SYSTEM_MESSAGE>";
+  private static readonly CLOSE_TAG = "</SYSTEM_MESSAGE>";
+  private static readonly MSG_PREFIX = "[Message] timestamp=";
+
+  /**
+   * Feed a new text chunk and return only the display-safe portion.
+   */
+  feed(chunk: string): string {
+    if (!chunk) return "";
+    this.buffer += chunk;
+    let safeOutput = "";
+
+    while (this.buffer.length > 0) {
+      if (this.inSystemBlock) {
+        // Look for closing tag </SYSTEM_MESSAGE>
+        const closeIdx = this.buffer.toUpperCase().indexOf(AGyStreamSanitizer.CLOSE_TAG);
+        if (closeIdx >= 0) {
+          let endIdx = closeIdx + AGyStreamSanitizer.CLOSE_TAG.length;
+          if (this.buffer[endIdx] === "}") {
+            endIdx++;
+          }
+          this.buffer = this.buffer.slice(endIdx);
+          this.inSystemBlock = false;
+          continue;
+        }
+
+        // Look for log finish marker
+        const logEndMatch = /(?:Task output has been logged to:|Log:)[^\n]*\n/i.exec(this.buffer);
+        if (logEndMatch && logEndMatch.index !== undefined) {
+          let endIdx = logEndMatch.index + logEndMatch[0].length;
+          const rest = this.buffer.slice(endIdx);
+          const followClose = /^<\/?SYSTEM_MESSAGE>}?/i.exec(rest);
+          if (followClose) {
+            endIdx += followClose[0].length;
+          }
+          this.buffer = this.buffer.slice(endIdx);
+          this.inSystemBlock = false;
+          continue;
+        }
+
+        // Still in system block; preserve potential partial close tag at tail
+        const tailCheckLen = AGyStreamSanitizer.CLOSE_TAG.length;
+        let keepLen = 0;
+        for (let i = 1; i < tailCheckLen && i <= this.buffer.length; i++) {
+          const tail = this.buffer.slice(this.buffer.length - i).toUpperCase();
+          if (AGyStreamSanitizer.CLOSE_TAG.startsWith(tail)) {
+            keepLen = i;
+          }
+        }
+        this.buffer = this.buffer.slice(this.buffer.length - keepLen);
+        break;
+      } else {
+        // Not in system block; check for opening markers
+        const upper = this.buffer.toUpperCase();
+        const openIdx = upper.indexOf(AGyStreamSanitizer.OPEN_TAG);
+        const msgIdx = this.buffer.indexOf(AGyStreamSanitizer.MSG_PREFIX);
+
+        let targetIdx = -1;
+        let skipLen = 0;
+        if (openIdx >= 0 && msgIdx >= 0) {
+          if (openIdx <= msgIdx) {
+            targetIdx = openIdx;
+            skipLen = AGyStreamSanitizer.OPEN_TAG.length;
+          } else {
+            targetIdx = msgIdx;
+            skipLen = 0;
+          }
+        } else if (openIdx >= 0) {
+          targetIdx = openIdx;
+          skipLen = AGyStreamSanitizer.OPEN_TAG.length;
+        } else if (msgIdx >= 0) {
+          targetIdx = msgIdx;
+          skipLen = 0;
+        }
+
+        if (targetIdx >= 0) {
+          safeOutput += this.buffer.slice(0, targetIdx);
+          this.buffer = this.buffer.slice(targetIdx + skipLen);
+          this.inSystemBlock = true;
+          continue;
+        }
+
+        // Neither found; check for partial prefix of open tag or message prefix at the buffer tail
+        const maxCheck = Math.max(AGyStreamSanitizer.OPEN_TAG.length, AGyStreamSanitizer.MSG_PREFIX.length);
+        let keepLen = 0;
+        for (let i = 1; i < maxCheck && i <= this.buffer.length; i++) {
+          const tail = this.buffer.slice(this.buffer.length - i);
+          const tailUpper = tail.toUpperCase();
+          if (
+            AGyStreamSanitizer.OPEN_TAG.startsWith(tailUpper) ||
+            AGyStreamSanitizer.MSG_PREFIX.startsWith(tail)
+          ) {
+            keepLen = i;
+          }
+        }
+
+        const emitLen = this.buffer.length - keepLen;
+        if (emitLen > 0) {
+          safeOutput += this.buffer.slice(0, emitLen);
+          this.buffer = this.buffer.slice(emitLen);
+        }
+        break;
+      }
+    }
+
+    return safeOutput;
+  }
+
+  /**
+   * Flush any remaining buffered characters.
+   */
+  flush(): string {
+    if (this.inSystemBlock) {
+      this.buffer = "";
+      return "";
+    }
+    const remaining = this.buffer;
+    this.buffer = "";
+    return sanitizeAGyText(remaining);
+  }
+}
+
+export interface ParseContext {
   sessionId: string;
   roundActive: boolean;
   pendingNewRound: boolean;
   lastRoundText: string;
   emittedToolParts: Set<number>;
   emittedToolResults: Set<number>;
+  sanitizer?: AGyStreamSanitizer;
 }
 
 interface ParseResult {
@@ -165,6 +326,14 @@ export function parseAGyEvent(
           (toolInfo?.name ?? "tool"),
       );
       if (state === "ACTIVE") {
+        if (ctx.sanitizer) {
+          const flushed = ctx.sanitizer.flush();
+          if (flushed) {
+            ctx.lastRoundText += flushed;
+            deltaText += flushed;
+            driverEvents.push({ kind: "text", delta: flushed });
+          }
+        }
         const input = toolInfo && typeof toolInfo === "object" ? ((toolInfo.parameters as Record<string, unknown>) ?? {}) : {};
         const summary = summarizeToolInput(name, input) || name;
         if (!ctx.emittedToolParts.has(stepIndex)) {
@@ -204,28 +373,42 @@ export function parseAGyEvent(
 
     // 2d. agent_response — streamed text chunks; the final answer lives here.
     if (stepType === "agent_response") {
-      const td = typeof step.text_delta === "string"
+      const rawTd = typeof step.text_delta === "string"
         ? step.text_delta
         : typeof step.textDelta === "string"
           ? step.textDelta
           : "";
-      if (td) {
-        const r = shouldStartRound({ roundActive, pendingNewRound }, "text");
-        if (r.start) driverEvents.push({ kind: "roundStart" });
-        roundActive = r.roundActive;
-        pendingNewRound = r.pendingNewRound;
-        ctx.lastRoundText += td;
-        deltaText += td;
-        driverEvents.push({ kind: "text", delta: td });
+      if (rawTd) {
+        if (!ctx.sanitizer) {
+          ctx.sanitizer = new AGyStreamSanitizer();
+        }
+        const td = ctx.sanitizer.feed(rawTd);
+        if (td) {
+          const r = shouldStartRound({ roundActive, pendingNewRound }, "text");
+          if (r.start) driverEvents.push({ kind: "roundStart" });
+          roundActive = r.roundActive;
+          pendingNewRound = r.pendingNewRound;
+          ctx.lastRoundText += td;
+          deltaText += td;
+          driverEvents.push({ kind: "text", delta: td });
+        }
       }
     }
   }
 
   // 3. Result event — terminal summary with final response, status, usage.
   if (event === "result") {
+    if (ctx.sanitizer) {
+      const flushed = ctx.sanitizer.flush();
+      if (flushed) {
+        ctx.lastRoundText += flushed;
+        deltaText += flushed;
+      }
+    }
     const result = (typeof o.result === "object" && o.result ? o.result : {}) as Record<string, unknown>;
     const status = String(result.status || "").toUpperCase();
-    const resultText = typeof result.response === "string" ? result.response : ctx.lastRoundText;
+    const rawResultText = typeof result.response === "string" ? result.response : ctx.lastRoundText;
+    const resultText = sanitizeAGyText(rawResultText);
     const isError = status === "ERROR";
 
     if (result.usage && typeof result.usage === "object") {
@@ -476,7 +659,7 @@ export async function* runAGy(params: RunParams): AsyncGenerator<DriverEvent> {
           push({
             event: {
               kind: "done",
-              text: fullText,
+              text: sanitizeAGyText(fullText),
               isError: false,
               aborted: true,
               abortedReason: timedOut ? "timeout" : "user",
@@ -502,7 +685,7 @@ export async function* runAGy(params: RunParams): AsyncGenerator<DriverEvent> {
           push({
             event: {
               kind: "done",
-              text: fullText,
+              text: sanitizeAGyText(fullText),
               isError: false,
               aborted: false,
               costUsd,

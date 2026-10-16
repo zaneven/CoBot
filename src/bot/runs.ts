@@ -193,6 +193,7 @@ export async function runTurn(opts: {
     : undefined;
 
   function cleanNarration(text: string): string {
+    if (isMachineLogNoise(text)) return "";
     let clean = text.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
     clean = clean.replace(/[`*#]/g, "");
     if (clean.length > 28) clean = clean.slice(0, 27) + "…";
@@ -796,10 +797,44 @@ function isSummaryFragment(candidate: string, summary: string): boolean {
   return false;
 }
 
+/**
+ * Detect machine build logs, system message bleed, or command raw outputs that
+ * shouldn't be formatted as user-facing narration in the intermediate trace.
+ */
+export function isMachineLogNoise(text: string): boolean {
+  if (!text) return false;
+  // Direct system protocol markers
+  if (/<SYSTEM_MESSAGE>|\[Message\]\s+timestamp=|<\/SYSTEM_MESSAGE>/i.test(text)) {
+    return true;
+  }
+  // Indicators of compiler, build runner, or raw CLI command dumps
+  const logSignals = [
+    "BUILD SUCCEEDED",
+    "BUILD FAILED",
+    "ExecuteExternalTool",
+    "ProcessProductPackaging",
+    "builtin-swiftStdLibTool",
+    "The command exited with code",
+    "Task output has been logged to:",
+    "<truncated",
+    "Entitlements:",
+    "Signing Identity:",
+  ];
+  let matches = 0;
+  for (const signal of logSignals) {
+    if (text.includes(signal)) {
+      matches++;
+      if (matches >= 2) return true;
+    }
+  }
+  return false;
+}
+
 export function buildTraceReply(texts: string[], summary: string): string {
   const s = summary.trim();
   const intermediate = (texts.length > 1 ? texts.slice(0, -1) : [])
-    .filter((t) => !isSummaryFragment(t, s));
+    .filter((t) => !isSummaryFragment(t, s))
+    .filter((t) => !isMachineLogNoise(t));
   const lists = intermediate
     .map((t) => toBulletList(t.trim()))
     .filter(Boolean);
