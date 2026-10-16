@@ -18,7 +18,21 @@ ROOT_DIR="$(cd -P "${SCRIPT_DIR}/.." && pwd)"
 
 PID_FILE="${ROOT_DIR}/data/cobot.pid"
 LOG_FILE="${ROOT_DIR}/bot.log"
+BACKUP_LOG_FILE="${ROOT_DIR}/bot.log.1"
 DB_FILE="${ROOT_DIR}/data/cobot.db"
+# Written by `__run` at startup: which launchd session the bot actually landed
+# in. Surfaced by `status` — see the launchd block below for why it matters.
+SESSION_FILE="${ROOT_DIR}/data/session"
+
+# launchd agent identity. The bot is normally supervised as a GUI-session agent
+# rather than a bare nohup'd process; see the "launchd (Aqua session)" block.
+AGENT_LABEL="${COBOT_AGENT_LABEL:-com.cobot.agent}"
+AGENT_PLIST="${HOME}/Library/LaunchAgents/${AGENT_LABEL}.plist"
+GUI_DOMAIN="gui/$(id -u)"
+
+# launchd appends to StandardOutPath, so bot.log is no longer truncated on every
+# start (a crash loop used to overwrite its own evidence). Roll over instead.
+LOG_MAX_BYTES=$((10 * 1024 * 1024))
 
 # Ensure data directory exists
 mkdir -p "${ROOT_DIR}/data"
@@ -65,6 +79,178 @@ export_proxy_env() {
     export HTTP_PROXY="${PROXY_URL}"
     export HTTPS_PROXY="${PROXY_URL}"
   fi
+}
+
+# ── launchd (Aqua session) ───────────────────────────────────────────────────
+#
+# CoBot has to run inside the GUI/Aqua launchd session. macOS only releases
+# login-keychain secrets to processes in that session; anything in the per-user
+# "Background" session — an SSH login, or a job that opted into Background via
+# `LimitLoadToSessionType` — gets errSecInteractionNotAllowed instead. The whole
+# gh → git credential chain then collapses quietly:
+#
+#   security find-generic-password -s gh:github.com -w   → fails (secret denied)
+#   gh auth git-credential get                           → returns nothing
+#   git push                                             → fatal: could not read
+#       Username for 'https://github.com': Device not configured
+#
+# Reads are denied but writes are not, so `gh auth login` "succeeds" in such a
+# session while changing nothing — which is what makes this bug so slippery. The
+# durable fix is therefore to start the bot *in* Aqua, not to move the token
+# somewhere less protected.
+#
+# `start` bootstraps this LaunchAgent instead of nohup-ing the bot. A job in
+# gui/<uid> is started from that session regardless of who asked, so `/restart`
+# from Telegram — which spawns this script from inside the bot itself — also
+# lands the replacement instance in Aqua, self-healing a bot that was started
+# over SSH.
+
+have_launchd() {
+  [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1
+}
+
+agent_loaded() {
+  launchctl print "${GUI_DOMAIN}/${AGENT_LABEL}" >/dev/null 2>&1
+}
+
+agent_pid_of() {
+  agent_loaded || return 0
+  launchctl print "${GUI_DOMAIN}/${AGENT_LABEL}" 2>/dev/null \
+    | awk '/^[[:space:]]*pid = /{print $3; exit}'
+}
+
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+# Keep bot.log bounded now that launchd appends to it instead of truncating.
+rotate_log() {
+  [ -f "${LOG_FILE}" ] || return 0
+  local size
+  size=$(wc -c < "${LOG_FILE}" 2>/dev/null || echo 0)
+  [ "${size:-0}" -gt "${LOG_MAX_BYTES}" ] || return 0
+  mv -f "${LOG_FILE}" "${BACKUP_LOG_FILE}" 2>/dev/null || true
+}
+
+write_agent_plist() {
+  mkdir -p "$(dirname "${AGENT_PLIST}")"
+
+  # launchd hands a job a bare /usr/bin:/bin:/usr/sbin:/sbin — no nvm, no
+  # homebrew. Bake in the directory of the node running THIS script, since that
+  # is where npx/tsx resolve from.
+  local node_dir=""
+  if command -v node >/dev/null 2>&1; then
+    node_dir="$(cd "$(dirname "$(command -v node)")" && pwd)"
+  fi
+  local path_env="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+  [ -n "${node_dir}" ] && path_env="${node_dir}:${path_env}"
+
+  # launchd does not inherit the calling shell's environment, so every variable
+  # CoBot reads has to be declared here. This is a deliberate allowlist rather
+  # than a dump of `env`: the plist sits at a predictable path, and forwarding
+  # everything would copy unrelated secrets into it.
+  local kv=""
+  emit_env() {
+    [ -z "$2" ] && return 0
+    kv="${kv}        <key>$1</key>
+        <string>$(xml_escape "$2")</string>
+"
+  }
+  emit_env PATH "${path_env}"
+  emit_env COBOT_WATCH "${COBOT_WATCH:-0}"
+  emit_env COBOT_KEEPALIVE "${COBOT_KEEPALIVE:-0}"
+  emit_env COBOT_NOTIFY_CID "${COBOT_NOTIFY_CID:-}"
+  if [ -n "${PROXY_URL}" ]; then
+    emit_env COBOT_PROXY "${PROXY_URL}"
+    emit_env HTTPS_PROXY "${PROXY_URL}"
+    emit_env HTTP_PROXY "${PROXY_URL}"
+  fi
+  local name val
+  for name in LOG_LEVEL NO_PRETTY COBOT_ADMIN_ENABLED COBOT_ADMIN_PORT \
+              COBOT_ADMIN_HOST COBOT_BACKEND COBOT_DB_PATH COBOT_ALLOWED_ROOT \
+              CLAUDE_PATH CLAUDE_MODEL CLAUDE_PERMISSION_MODE CLAUDE_MAX_TURNS \
+              CLAUDE_TASK_TIMEOUT_MS CLAUDE_ALLOW_DANGEROUS_SKIP_PERMISSIONS \
+              OPENCODE_PATH OPENCODE_AUTO_APPROVE OPENCODE_TASK_TIMEOUT_MS \
+              AGY_PATH AGY_DB_PATH AGY_AUTO_APPROVE AGY_TASK_TIMEOUT_MS \
+              HERMES_API_KEY HERMES_API_URL; do
+    val="${!name}"
+    emit_env "${name}" "${val}"
+  done
+
+  # Optional crash supervision. Off by default: it changes stop/start semantics
+  # (a crash resurrection can mask a bad config), and a plain agent already
+  # matches the previous nohup behaviour.
+  local keep=""
+  if [ "${COBOT_KEEPALIVE:-0}" = "1" ]; then
+    keep="    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+"
+  fi
+
+  cat > "${AGENT_PLIST}" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$(xml_escape "${AGENT_LABEL}")</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>$(xml_escape "${ROOT_DIR}/scripts/cobot.sh")</string>
+        <string>__run</string>
+    </array>
+
+    <!-- The point of this agent. Aqua is the only launchd session macOS hands
+         login-keychain secrets to; a Background job gets
+         errSecInteractionNotAllowed, which silently breaks gh/git pushes. -->
+    <key>LimitLoadToSessionType</key>
+    <array>
+        <string>Aqua</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>WorkingDirectory</key>
+    <string>$(xml_escape "${ROOT_DIR}")</string>
+
+    <key>StandardOutPath</key>
+    <string>$(xml_escape "${LOG_FILE}")</string>
+    <key>StandardErrorPath</key>
+    <string>$(xml_escape "${LOG_FILE}")</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+${kv}    </dict>
+${keep}</dict>
+</plist>
+PLIST
+  # 0600: the plist can carry a proxy URL and (if the caller exported them)
+  # API keys. launchd is happy with an owner-only plist.
+  chmod 600 "${AGENT_PLIST}"
+}
+
+# Load or reload the agent. Prefers `kickstart -k` when the job is already
+# bootstrapped, so a restart never depends on `bootout` succeeding from a
+# non-GUI session — which matters because /restart runs this script from inside
+# the bot, and the bot itself may still be in the Background session.
+load_agent() {
+  # `stop` disables the service so it stays down across logins — undo that
+  # before (re)loading, or bootstrap would silently refuse to start it.
+  launchctl enable "${GUI_DOMAIN}/${AGENT_LABEL}" >/dev/null 2>&1 || true
+
+  if agent_loaded; then
+    if launchctl kickstart -k "${GUI_DOMAIN}/${AGENT_LABEL}" >/dev/null 2>&1; then
+      return 0
+    fi
+    launchctl bootout "${GUI_DOMAIN}/${AGENT_LABEL}" >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  launchctl bootstrap "${GUI_DOMAIN}" "${AGENT_PLIST}" >/dev/null 2>&1
 }
 
 # ── Process Helpers ──────────────────────────────────────────────────────────
@@ -236,6 +422,19 @@ cmd_stop() {
   echo " Stopping CoBot"
   echo "=========================================="
 
+  # Unload the agent first: it supervises the bot, so killing the process
+  # behind launchd's back would just look like a crash to it.
+  if have_launchd; then
+    if agent_loaded; then
+      echo "[+] Unloading launchd agent ${AGENT_LABEL}..."
+      launchctl bootout "${GUI_DOMAIN}/${AGENT_LABEL}" >/dev/null 2>&1 || true
+    fi
+    # Keep it down across logins. The plist stays in ~/Library/LaunchAgents, so
+    # without this `stop` would quietly undo itself the next time you log in.
+    # `start` re-enables before bootstrapping.
+    launchctl disable "${GUI_DOMAIN}/${AGENT_LABEL}" >/dev/null 2>&1 || true
+  fi
+
   if [ -f "${PID_FILE}" ]; then
     local saved_pid
     saved_pid=$(cat "${PID_FILE}" 2>/dev/null || true)
@@ -264,10 +463,6 @@ cmd_start() {
   echo "=========================================="
   echo " Starting CoBot"
   echo "=========================================="
-
-  # Ensure a clean slate — clear any lingering instance before launching. This
-  # is what lets `restart` reliably bring the bot back up.
-  kill_all_cobot || true
 
   export_proxy_env
 
@@ -303,6 +498,50 @@ cmd_start() {
   fi
 
   echo "[+] Launch mode: ${TSX_CMD}"
+
+  # Preferred path: hand the bot to launchd in the Aqua session. See the
+  # "launchd (Aqua session)" block near the top for why the session matters.
+  if have_launchd; then
+    # Reap anything an earlier nohup launch left behind — a stray poller would
+    # fight the new instance for Telegram's single long-poll slot (409 Conflict).
+    kill_all_cobot || true
+    rotate_log
+    write_agent_plist
+    echo "[+] Starting launchd agent ${AGENT_LABEL} (session: Aqua)..."
+
+    if load_agent; then
+      # Wait 5 seconds to verify full startup (including Telegram getMe & command menu registration)
+      sleep 5
+
+      echo "------------------------------------------"
+      echo " Startup Log Preview:"
+      echo "------------------------------------------"
+      tail -n 15 "${LOG_FILE}" || true
+      echo "------------------------------------------"
+
+      local agent_pid
+      agent_pid=$(agent_pid_of)
+      if [ -n "${agent_pid}" ]; then
+        echo "${agent_pid}" > "${PID_FILE}"
+        echo "[+] CoBot is running and ready (PID: ${agent_pid}, ${GUI_DOMAIN}/${AGENT_LABEL})."
+        echo "[+] Admin: $(get_admin_url)"
+        return 0
+      fi
+      echo "[!] launchd loaded ${AGENT_LABEL} but no process is running. Check ${LOG_FILE}."
+      return 1
+    fi
+
+    echo "[!] Could not bootstrap the launchd agent — no reachable GUI session for uid $(id -u)?"
+    echo "    Falling back to a plain background process."
+  fi
+
+  # Fallback: a bare background process, no launchd. This works on hosts with no
+  # GUI session, but if this shell IS an SSH/Background session the bot inherits
+  # it and can no longer read the login keychain — git/gh pushes from the bot
+  # will fail until it is restarted from a GUI terminal.
+  echo "[!] Starting without launchd — login-keychain credentials may be unavailable"
+  echo "    to the bot if this shell is an SSH/Background session."
+  kill_all_cobot || true
   echo "[+] Launching CoBot in background..."
   nohup ${TSX_CMD} src/index.ts > "${LOG_FILE}" 2>&1 &
   local new_pid=$!
@@ -326,6 +565,32 @@ cmd_start() {
     echo "[!] CoBot failed to start. Check ${LOG_FILE} for errors."
     return 1
   fi
+}
+
+# Internal foreground entry point — the command the launchd agent's
+# ProgramArguments invoke. Not part of the public CLI.
+cmd_run() {
+  cd "${ROOT_DIR}"
+  export_proxy_env
+
+  # Stamp (and shout about) the launchd session we actually landed in. This one
+  # fact is what explains "the bot can't push any more": if it says Background,
+  # macOS is withholding the login keychain and no amount of `gh auth login`
+  # will help, because writes to the keychain are allowed while reads are not.
+  local mgr="unknown"
+  command -v launchctl >/dev/null 2>&1 && mgr="$(launchctl managername 2>/dev/null || echo unknown)"
+  echo "${mgr}" > "${SESSION_FILE}" 2>/dev/null || true
+  if [ "${mgr}" != "Aqua" ]; then
+    echo "[!] CoBot started in the '${mgr}' launchd session, not Aqua."
+    echo "    Login-keychain reads will fail here, so gh/git pushes from the bot"
+    echo "    will report \"could not read Username for 'https://github.com'\"."
+    echo "    Fix: run 'cobot stop && cobot start' from a local GUI terminal."
+  fi
+
+  if [ "${COBOT_WATCH:-}" = "1" ] || [ "${COBOT_WATCH:-}" = "true" ] || [ "${COBOT_WATCH:-}" = "yes" ]; then
+    exec npx tsx watch src/index.ts
+  fi
+  exec npx tsx src/index.ts
 }
 
 cmd_restart() {
@@ -352,6 +617,30 @@ cmd_status() {
     echo "[Admin]:  $(get_admin_url)"
   else
     echo "[Status]: STOPPED"
+  fi
+
+  # launchd supervision state. A job in gui/<uid> is what keeps the bot inside
+  # the Aqua session.
+  if have_launchd; then
+    if agent_loaded; then
+      echo "[launchd]: ${AGENT_LABEL} loaded in ${GUI_DOMAIN} (LimitLoadToSessionType=Aqua)"
+    else
+      echo "[launchd]: ${AGENT_LABEL} not loaded (bare background process?)"
+    fi
+  fi
+
+  # Session the running instance actually reported at startup (stamped by
+  # `__run`). Anything other than Aqua means macOS is withholding the login
+  # keychain: gh/git pushes from the bot WILL fail, whatever `gh auth status`
+  # says in your own terminal.
+  if [ -f "${SESSION_FILE}" ]; then
+    local session
+    session=$(cat "${SESSION_FILE}" 2>/dev/null || echo "?")
+    if [ "${session}" = "Aqua" ]; then
+      echo "[Session]: ${session} (login keychain accessible)"
+    else
+      echo "[Session]: ${session} — WARNING: keychain inaccessible, git/gh pushes will fail"
+    fi
   fi
 
   if [ -f "${LOG_FILE}" ]; then
@@ -515,12 +804,23 @@ cmd_uninstall() {
     fi
   done
 
-  # 3. Remove runtime & build artifacts
+  # 3. Remove the launchd agent (cmd_stop already booted it out; this drops the
+  #    plist so it doesn't come back at the next login).
+  if have_launchd && [ -f "${AGENT_PLIST}" ]; then
+    echo "[+] Removing launchd agent ${AGENT_LABEL}..."
+    launchctl bootout "${GUI_DOMAIN}/${AGENT_LABEL}" >/dev/null 2>&1 || true
+    # `stop` disabled the service; clear that record so a later reinstall of the
+    # same label isn't silently blocked from bootstrapping.
+    launchctl enable "${GUI_DOMAIN}/${AGENT_LABEL}" >/dev/null 2>&1 || true
+    rm -f "${AGENT_PLIST}" && echo "    removed ${AGENT_PLIST}" || true
+  fi
+
+  # 4. Remove runtime & build artifacts
   echo "[+] Removing runtime & build artifacts..."
   rm -rf "${ROOT_DIR}/node_modules" "${ROOT_DIR}/dist" "${ROOT_DIR}/data" 2>/dev/null || true
-  rm -f "${ROOT_DIR}/bot.log" "${ROOT_DIR}/test.log" 2>/dev/null || true
+  rm -f "${ROOT_DIR}/bot.log" "${ROOT_DIR}/bot.log.1" "${ROOT_DIR}/test.log" 2>/dev/null || true
 
-  # 4. Remove config (holds your bot token). The example templates stay, so a
+  # 5. Remove config (holds your bot token). The example templates stay, so a
   #    later reinstall regenerates config.yaml/.env via setup.
   if [ -f "${ROOT_DIR}/config.yaml" ]; then
     rm -f "${ROOT_DIR}/config.yaml"
@@ -562,6 +862,10 @@ case "${1:-}" in
   uninstall)
     cmd_uninstall "${2:-}"
     ;;
+  __run)
+    # Internal: launchd invokes this. Not a user-facing command.
+    cmd_run
+    ;;
   *)
     echo "CoBot Management Script"
     echo ""
@@ -569,12 +873,16 @@ case "${1:-}" in
     echo ""
     echo "Commands:"
     echo "  install   - Install deps, create config, interactive setup, link CLI, then start."
-    echo "  start     - Start CoBot service in background with proxy auto-injection."
+    echo "  start     - Start CoBot as a GUI-session (Aqua) launchd agent, with proxy auto-injection."
     echo "  stop      - Gracefully stop CoBot process and clear SQLite task locks."
     echo "  restart   - Restart CoBot service."
-    echo "  status    - Check running status and recent logs."
+    echo "  status    - Check running status, launchd session and recent logs."
     echo "  update    - Pull latest source from the remote, refresh deps, and restart."
     echo "  uninstall - Stop CoBot, remove global CLI, delete deps/data/config. (--yes skips prompt)"
+    echo ""
+    echo "Environment:"
+    echo "  COBOT_AGENT_LABEL  launchd label (default: com.cobot.agent)"
+    echo "  COBOT_KEEPALIVE=1  let launchd restart the bot after a crash (default: off)"
     exit 1
     ;;
 esac

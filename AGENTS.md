@@ -139,11 +139,30 @@ src/
    该指令会自动复制配置文件模版、安装 npm 依赖、运行交互式配置（Telegram Token / 用户 ID / 开发根目录，默认取项目目录的上级）、类型检查，注册全局 `cobot` CLI 软链接，**并在配置完成后自动启动 Bot 服务**。
 
 2. **全局服务管理命令（可在系统任何目录下运行）**：
-   - `cobot start` 或 `./scripts/cobot.sh start`：后台启动 Bot 服务，自动检测并注入代理（如 `127.0.0.1:10808`）。
-   - `cobot stop` 或 `./scripts/cobot.sh stop`：平滑关闭进程并清理 SQLite 数据库中因中断残留的任务锁。
+   - `cobot start` 或 `./scripts/cobot.sh start`：以 **Aqua（GUI）会话的 launchd agent** 启动 Bot 服务，自动检测并注入代理（如 `127.0.0.1:10808`）。
+   - `cobot stop` 或 `./scripts/cobot.sh stop`：卸载 agent（并 `launchctl disable`，避免下次登录被重新拉起）、平滑关闭进程，并清理 SQLite 数据库中因中断残留的任务锁。
    - `cobot restart` 或 `./scripts/cobot.sh restart`：安全重启 Bot 服务。
-   - `cobot status` 或 `./scripts/cobot.sh status`：查看服务 PID 状态、代理连通及 `bot.log` 运行日志。
-   - `cobot uninstall` 或 `./scripts/cobot.sh uninstall`：停止服务并移除全局 `cobot` CLI 与 `node_modules`/`dist`/`data`/日志/`config.yaml`/`.env`（源码目录保留）。加 `--yes` 跳过确认提示。
+   - `cobot status` 或 `./scripts/cobot.sh status`：查看服务 PID 状态、launchd agent/session、代理连通及 `bot.log` 运行日志。
+   - `cobot uninstall` 或 `./scripts/cobot.sh uninstall`：停止服务并移除全局 `cobot` CLI、launchd agent 与 `node_modules`/`dist`/`data`/日志/`config.yaml`/`.env`（源码目录保留）。加 `--yes` 跳过确认提示。
+
+### 7.1 为什么必须跑在 Aqua 会话（macOS 登录钥匙串约束）
+
+**CoBot 进程树必须位于 macOS 的 Aqua（GUI）launchd 会话内。** `securityd` 只向该会话内的进程释放登录钥匙串密文；处于 per-user **Background** 会话的进程（SSH 登录、或 `LimitLoadToSessionType` 声明为 `Background` 的任务）读取时会被拒绝（`errSecInteractionNotAllowed`）。此时 `~/.gitconfig` 里的 `credential.helper = !gh auth git-credential` 会静默失效，因为 gh 的 OAuth token 存在登录钥匙串中（`~/.config/gh/hosts.yml` 无明文字段）：
+
+```
+security find-generic-password -s gh:github.com -w   → 拒绝（密文不可读，条目元数据仍可列出）
+gh auth git-credential get                           → 返回空
+git push                                             → fatal: could not read Username for
+                                                       'https://github.com': Device not configured
+```
+
+注意**写钥匙串是允许的、读才被拒**，所以这种会话里 `gh auth login` 会「成功」却毫无作用——这是该故障最迷惑人的地方。因此修复方向是让 Bot 跑进 Aqua，而不是把 token 挪到保护更弱的地方。
+
+因此 `start` 不再 `nohup` 拉起进程，而是 bootstrap 一个 `LimitLoadToSessionType=[Aqua]` 的 LaunchAgent（默认 label `com.cobot.agent`，plist 位于 `~/Library/LaunchAgents/`）。job 位于 `gui/<uid>`，无论调用者处于哪个会话都会被拉起——所以从 Telegram 触发的 `/restart`（由 Bot 自己 spawn `cobot.sh`）落地的新实例同样在 Aqua，可自愈一个曾被 SSH 启动的实例。
+
+`cobot status` 会打印 `[Session]` 行（由 `cobot __run` 启动时写入 `data/session`）：非 `Aqua` 即意味着钥匙串不可用、Bot 的 git/gh 推送必然失败。
+
+可用环境变量：`COBOT_AGENT_LABEL`（自定义 label）、`COBOT_KEEPALIVE=1`（崩溃后由 launchd 自动重启，默认关闭）。
 
 ---
 
