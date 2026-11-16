@@ -10,6 +10,9 @@ import { listOpenCodeModels } from "../opencode/models.js";
 import { runAGy } from "../agy/driver.js";
 import { listAGySessions, findAGySession } from "../agy/sessions.js";
 import { listAGyModels } from "../agy/models.js";
+import { runDsh } from "../dsh/driver.js";
+import { listDshSessions, findDshSession } from "../dsh/sessions.js";
+import { listDshModels } from "../dsh/models.js";
 import { logger } from "../util/logger.js";
 
 export async function* runAgent(params: RunParams, backend: EngineBackend = "claude"): AsyncGenerator<DriverEvent> {
@@ -20,6 +23,8 @@ export async function* runAgent(params: RunParams, backend: EngineBackend = "cla
     yield* runOpenCode(params);
   } else if (chosenBackend === "agy") {
     yield* runAGy(params);
+  } else if (chosenBackend === "dsh") {
+    yield* runDsh(params);
   } else {
     yield* runClaude(params);
   }
@@ -36,6 +41,9 @@ export async function listAgentSessions(
   if (backend === "agy") {
     return listAGySessions(dir, limit);
   }
+  if (backend === "dsh") {
+    return listDshSessions(dir, limit);
+  }
   return listProjectSessions(dir, limit);
 }
 
@@ -49,6 +57,9 @@ export async function listAllAgentSessions(
   if (backend === "agy") {
     return listAGySessions(undefined, limit);
   }
+  if (backend === "dsh") {
+    return listDshSessions(undefined, limit);
+  }
   return listAllSessions(limit);
 }
 
@@ -61,6 +72,9 @@ export async function findAgentSession(
   }
   if (backend === "agy") {
     return findAGySession(sessionId);
+  }
+  if (backend === "dsh") {
+    return findDshSession(sessionId);
   }
   return findClaudeSession(sessionId);
 }
@@ -79,6 +93,9 @@ export async function listAgentModels(
   }
   if (backend === "agy") {
     return listAGyModels(config);
+  }
+  if (backend === "dsh") {
+    return listDshModels(config);
   }
   return listClaudeModels(config);
 }

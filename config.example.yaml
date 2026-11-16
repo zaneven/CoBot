@@ -39,9 +39,9 @@ defaults:
   dailyTokenCap: 20000000 # example: 200k tokens per chat per day (undefined = no cap)
   showTraceText: true # true = include intermediate narration trace text blocks in the final reply
 
-# AI Engine backend ("claude" | "opencode" | "agy"). Default is "claude".
+# AI Engine backend ("claude" | "opencode" | "agy" | "dsh"). Default is "claude".
 # Override per-chat at runtime with /engine.
-# env: COBOT_BACKEND=claude | opencode | agy
+# env: COBOT_BACKEND=claude | opencode | agy | dsh
 backend: claude
 
 # OpenCode engine configuration (when backend is opencode or chosen via /engine).
@@ -60,6 +60,17 @@ agy:
   # effort: "high"                 # reasoning effort: low|medium|high (env: AGY_EFFORT)
   autoApprove: true                  # auto-approve permissions (env: AGY_AUTO_APPROVE)
   timeoutMs: 600000                  # task timeout in ms
+
+# DeepSeek Harness (dsh) engine configuration (when backend is dsh or chosen via /engine).
+# Requires the `dsh` CLI; CoBot drives it through its ACP profile (dsh --profile acp).
+dsh:
+  # path: "/opt/homebrew/bin/dsh"  # custom dsh binary path (env: DSH_PATH)
+  # model: "deepseek-official/deepseek-v4-pro" # provider/model or bare model id (env: DSH_MODEL)
+  # models: []                     # extra curated entries for /models (env: DSH_MODELS)
+  # effort: "high"                 # reasoning effort: off|low|high|max (env: DSH_EFFORT)
+  # permissionMode: ""             # sandbox preset; unset = auto by approval mode (env: DSH_PERMISSION_MODE)
+  autoApprove: true                  # auto-approve ACP permission prompts (env: DSH_AUTO_APPROVE)
+  timeoutMs: 600000                  # task timeout in ms (env: DSH_TASK_TIMEOUT_MS)
 
 # Built-in Web Admin Panel configuration
 admin:

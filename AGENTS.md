@@ -54,6 +54,14 @@ src/
 │   ├── sessions.ts      — SDK listSessions 接口封装
 │   ├── types.ts         — DriverEvent、PromptInput、MediaAttachment 等核心类型定义
 │   └── driver.test.ts   — SDK 驱动层测试
+├── driver/
+│   └── index.ts         — runAgent 引擎分发（claude / opencode / agy / dsh）与会话/模型列表路由
+├── dsh/
+│   ├── client.ts        — DeepSeek Harness ACP 常驻运行时客户端（JSON-RPC stdio）
+│   ├── driver.ts        — runDsh 异步生成器：ACP 事件 → DriverEvent、prompt/媒体扁平化
+│   ├── models.ts        — ACP 模型目录 → /models 列表
+│   ├── sessions.ts      — 会话列表（日志标题）与每轮用量回读
+│   └── types.ts         — ACP 线协议类型子集
 ├── registry/
 │   └── registry.ts      — 单 Chat FIFO 任务队列与活跃任务（active-run）追踪
 ├── store/
@@ -101,7 +109,12 @@ src/
 ### 5. 无人值守权限管理 (Headless Permission)
 - 由于无前端交互界面，Driver 默认设置 `canUseTool = () => ({ behavior: "allow" })` 自动批准工具调用，防止任务因等待交互权限而超时挂起。
 
-### 6. 网络代理必传规则
+### 6. 引擎多后端约定 (Multi-engine)
+- `src/driver/index.ts` 是引擎分发入口；`src/claude/types.ts` 的 `DriverEvent` / `RunParams` 是所有引擎的唯一契约，新增引擎只能扩充这两个类型，禁止把引擎私有类型泄漏进 `src/bot/`。
+- DeepSeek Harness (`dsh`) 通过 **ACP 面**（`dsh --profile acp`）驱动：常驻单个 runtime 进程、按 session 隔离 cwd、`session/cancel` 实现 /stop。它没有 token 级流式、无 `costUsd`、无图片输入，详见 [docs/dsh_engine.md](docs/dsh_engine.md)。
+- 所有引擎的会话列表 / 模型列表 / 超时 / 默认模型都必须同时在 `src/driver/index.ts`、`src/bot/runs.ts`（`resolveEngineModel`）与 `src/bot/commands.ts`（`engineDefaultModel`）三处落地，否则 /engine 与 /models 会与实际运行不一致。
+
+### 7. 网络代理必传规则
 - 本机对 `api.telegram.org` 的请求需通过代理（`127.0.0.1:10808`）。
 - 任何新增的 HTTP/HTTPS 请求客户端（包括 grammY `baseFetchConfig`），均须传入 `src/util/proxy.ts` 生成的 Proxy Agent。
 

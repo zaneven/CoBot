@@ -8,6 +8,7 @@ import { approvalManager } from "./bot/approval.js";
 import { logger } from "./util/logger.js";
 import { createProxyAgent } from "./util/proxy.js";
 import { AdminServer } from "./admin/server.js";
+import { getSharedDshClient } from "./dsh/client.js";
 
 async function main(): Promise<void> {
   const proxyAgent = createProxyAgent();
@@ -143,6 +144,13 @@ async function main(): Promise<void> {
     logger.info({ sig }, "shutting down");
     adminServer.stop();
     cronManager.stopAll();
+    // The dsh runtime is a long-lived child; end it explicitly so no orphan
+    // spawn survives the bot (launchd would otherwise leave it under the agent).
+    try {
+      await getSharedDshClient().shutdown();
+    } catch {
+      /* best effort */
+    }
     try {
       await bot.stop();
     } catch {

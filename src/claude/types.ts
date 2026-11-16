@@ -102,7 +102,7 @@ export type UserDialogResult =
 export interface RunParams {
   prompt: PromptInput;
   cwd: string;
-  backend?: "claude" | "opencode" | "agy";
+  backend?: "claude" | "opencode" | "agy" | "dsh";
   /** Session UUID to resume. Omit to start a fresh session. */
   resume?: string;
   model?: string;
@@ -127,6 +127,12 @@ export interface RunParams {
   agyAutoApprove?: boolean;
   /** Reasoning effort for agy session (low|medium|high). */
   agyEffort?: string;
+  /** Custom path to the DeepSeek Harness executable (`dsh`). */
+  dshPath?: string;
+  /** Reasoning effort for a dsh run (off|low|high|max). */
+  dshEffort?: string;
+  /** Sandbox preset exported to the runtime as DSH_PERMISSION_MODE. */
+  dshPermissionPreset?: string;
   /** External abort signal (e.g. from /stop). */
   signal?: AbortSignal;
   /** Interactive tool-approval handler. When set, `canUseTool` delegates to it

@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { Database as DB } from "better-sqlite3";
 import { logger } from "../util/logger.js";
 
-export type EngineBackend = "claude" | "opencode" | "agy";
+export type EngineBackend = "claude" | "opencode" | "agy" | "dsh";
 
 export interface Binding {
   chatId: number;

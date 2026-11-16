@@ -29,6 +29,11 @@ function makeConfig(port: number): Config {
       autoApprove: true,
       timeoutMs: 600000,
     },
+    dsh: {
+      models: [],
+      autoApprove: true,
+      timeoutMs: 600000,
+    },
     admin: {
       enabled: true,
       host: "127.0.0.1",

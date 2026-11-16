@@ -44,6 +44,7 @@ export interface DashboardOutcome {
 export function engineLabel(engine?: string | null): string {
   if (engine === "opencode") return "OpenCode";
   if (engine === "agy") return "Antigravity CLI";
+  if (engine === "dsh") return "DeepSeek Harness";
   if (engine === "claude") return "Claude Code";
   return engine || "默认";
 }

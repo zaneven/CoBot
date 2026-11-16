@@ -48,7 +48,7 @@ export interface AdminConfig {
   apiKey: string;
 }
 
-export type EngineBackend = "claude" | "opencode" | "agy";
+export type EngineBackend = "claude" | "opencode" | "agy" | "dsh";
 
 export interface OpenCodeConfig {
   path?: string;
@@ -67,6 +67,18 @@ export interface AGyConfig {
   effort?: string;      // AGY_EFFORT (low|medium|high)
   autoApprove: boolean; // AGY_AUTO_APPROVE
   timeoutMs: number;    // AGY_TASK_TIMEOUT_MS
+}
+
+export interface DshConfig {
+  path?: string;          // DSH_PATH
+  model?: string;         // DSH_MODEL — provider/model id or bare model name
+  models: string[];       // DSH_MODELS — curated entries merged with the live catalog
+  effort?: string;        // DSH_EFFORT (off|low|high|max)
+  autoApprove: boolean;   // DSH_AUTO_APPROVE — headless anti-park default (true)
+  /** Sandbox preset the runtime runs under: workspace-write (default) keeps
+   *  writes inside the project; danger-full-access drops confinement. */
+  permissionMode?: string; // DSH_PERMISSION_MODE
+  timeoutMs: number;      // DSH_TASK_TIMEOUT_MS
 }
 
 export interface Config {
@@ -109,6 +121,7 @@ export interface Config {
   };
   opencode: OpenCodeConfig;
   agy: AGyConfig;
+  dsh: DshConfig;
   admin: AdminConfig;
   dbPath: string;
   projects: string[];
@@ -143,6 +156,15 @@ export interface YamlConfig {
     agent?: string;
     effort?: string;
     autoApprove?: boolean;
+    timeoutMs?: number;
+  };
+  dsh?: {
+    path?: string;
+    model?: string;
+    models?: string[];
+    effort?: string;
+    autoApprove?: boolean;
+    permissionMode?: string;
     timeoutMs?: number;
   };
   telegram?: {
@@ -354,7 +376,8 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
   };
 
   const backendRaw = (process.env.COBOT_BACKEND ?? yaml.backend ?? "claude").toLowerCase();
-  const backend: EngineBackend = backendRaw === "opencode" ? "opencode" : backendRaw === "agy" ? "agy" : "claude";
+  const backend: EngineBackend =
+    backendRaw === "opencode" ? "opencode" : backendRaw === "agy" ? "agy" : backendRaw === "dsh" ? "dsh" : "claude";
 
   const opencode: OpenCodeConfig = {
     path: envStr("OPENCODE_PATH") ?? yaml.opencode?.path,
@@ -373,6 +396,16 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
     effort: envStr("AGY_EFFORT") ?? yaml.agy?.effort,
     autoApprove: (process.env.AGY_AUTO_APPROVE ?? (yaml.agy?.autoApprove ?? true).toString()) === "true",
     timeoutMs: Number(process.env.AGY_TASK_TIMEOUT_MS ?? yaml.agy?.timeoutMs ?? taskTimeoutMs),
+  };
+
+  const dsh: DshConfig = {
+    path: envStr("DSH_PATH") ?? yaml.dsh?.path,
+    model: envStr("DSH_MODEL") ?? yaml.dsh?.model,
+    models: envList("DSH_MODELS") ?? yaml.dsh?.models ?? [],
+    effort: envStr("DSH_EFFORT") ?? yaml.dsh?.effort,
+    autoApprove: (process.env.DSH_AUTO_APPROVE ?? (yaml.dsh?.autoApprove ?? true).toString()) === "true",
+    permissionMode: envStr("DSH_PERMISSION_MODE") ?? yaml.dsh?.permissionMode,
+    timeoutMs: Number(process.env.DSH_TASK_TIMEOUT_MS ?? yaml.dsh?.timeoutMs ?? taskTimeoutMs),
   };
 
   return {
@@ -398,6 +431,7 @@ export function loadConfig(configPath = resolve(process.cwd(), "config.yaml")): 
     },
     opencode,
     agy,
+    dsh,
     admin,
     dbPath: process.env.COBOT_DB_PATH ?? resolve(process.cwd(), "data/cobot.db"),
     projects: (yaml.projects ?? []).map((p) => resolve(p)),

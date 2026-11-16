@@ -7,6 +7,7 @@ import type { Store, ApprovalMode } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
 import type { CronManager } from "../scheduler/cron.js";
 import { listAgentSessions, listAllAgentSessions, findAgentSession, listAgentModels } from "../driver/index.js";
+import { probeDshExecutable } from "../dsh/driver.js";
 import type { SwitchableModels } from "../claude/models.js";
 import { submitInteractive } from "./runs.js";
 import { dialogManager } from "./dialog.js";
@@ -30,7 +31,7 @@ export const BOT_COMMANDS: readonly BotCommandDef[] = [
   { command: "unbind", usage: "/unbind", description: "unbind this chat from its project" },
   { command: "new", usage: "/new", description: "start a fresh session" },
   { command: "auto", usage: "/auto [off]", description: "persistent auto session mode" },
-  { command: "engine", usage: "/engine [claude|opencode|agy|default]", description: "switch backend agent engine" },
+  { command: "engine", usage: "/engine [claude|opencode|agy|dsh|default]", description: "switch backend agent engine" },
   { command: "sessions", usage: "/sessions [all]", description: "list agent sessions (tap to switch)" },
   { command: "switch", usage: "/switch <id>", description: "switch the active session by id" },
   { command: "stop", usage: "/stop", description: "interrupt the running task" },
@@ -534,12 +535,14 @@ export function renderEngineKeyboard(current: EngineBackend | null, globalDefaul
   const isClaude = effective === "claude";
   const isOpenCode = effective === "opencode";
   const isAGy = effective === "agy";
+  const isDsh = effective === "dsh";
   const isDefault = current === null;
 
   const kb = new InlineKeyboard();
   kb.text(`${isClaude ? "✅ " : ""}Claude Code`, `${ENGINE_CB_PREFIX}claude`).row();
   kb.text(`${isOpenCode ? "✅ " : ""}OpenCode`, `${ENGINE_CB_PREFIX}opencode`).row();
   kb.text(`${isAGy ? "✅ " : ""}Antigravity CLI`, `${ENGINE_CB_PREFIX}agy`).row();
+  kb.text(`${isDsh ? "✅ " : ""}DeepSeek Harness`, `${ENGINE_CB_PREFIX}dsh`).row();
   kb.text(`${isDefault ? "● " : ""}跟随全局默认 (${globalDefault})`, `${ENGINE_CB_PREFIX}default`).row();
   return kb;
 }
@@ -547,7 +550,13 @@ export function renderEngineKeyboard(current: EngineBackend | null, globalDefaul
 export function engineStatusText(selected: EngineBackend | null, globalDefault: EngineBackend): string {
   const effective = selected ?? globalDefault;
   const tag = selected === null ? `默认 (${globalDefault})` : selected;
-  return `⚙️ 当前驱动引擎: <b>${tag}</b>\n(生效引擎: <code>${effective}</code>)\n\n点击下方按钮切换当前会话所使用的 AI 编程驱动:`;
+  // dsh runs a sandboxed runtime with no images and block-at-a-time streaming;
+  // say so up front so a surprising silence/format is never mistaken for a hang.
+  const dshHint =
+    effective === "dsh"
+      ? "\nℹ️ DeepSeek Harness 走 ACP 常驻运行时：文本按块输出（非逐字流式），不支持图片/PDF，工具写操作受 sandbox 预设约束。"
+      : "";
+  return `⚙️ 当前驱动引擎: <b>${tag}</b>\n(生效引擎: <code>${effective}</code>)${dshHint}\n\n点击下方按钮切换当前会话所使用的 AI 编程驱动:`;
 }
 
 /** /engine [claude|opencode|default] - view or switch the chat's AI engine. */
@@ -580,17 +589,26 @@ export async function handleEngine(ctx: Context, config: Config, store: Store): 
     return;
   }
 
-  if (arg === "claude" || arg === "opencode" || arg === "agy") {
+  if (arg === "claude" || arg === "opencode" || arg === "agy" || arg === "dsh") {
     store.setEngine(chatId, arg as EngineBackend);
     store.setSessionId(chatId, null);
-    await ctx.reply(engineStatusText(arg as EngineBackend, config.backend), {
+    // Switching TO dsh warns immediately when the CLI is missing — better than
+    // the user discovering it as a failed task a minute later.
+    let availability = "";
+    if (arg === "dsh") {
+      const ok = await probeDshExecutable(config.dsh?.path);
+      availability = ok
+        ? "\n✅ 已检测到 dsh CLI。"
+        : "\n⚠️ 未检测到 dsh CLI：请先安装 `@deepseek-ai/dsh`（npm i -g @deepseek-ai/dsh），或在 dsh.path / DSH_PATH 指定路径。";
+    }
+    await ctx.reply(engineStatusText(arg as EngineBackend, config.backend) + availability, {
       parse_mode: "HTML",
       reply_markup: renderEngineKeyboard(arg as EngineBackend, config.backend),
     });
     return;
   }
 
-  await ctx.reply("用法: /engine [claude|opencode|agy|default]");
+  await ctx.reply("用法: /engine [claude|opencode|agy|dsh|default]");
 }
 
 /** Callback for inline `engine:<engine>` buttons. */
@@ -612,7 +630,7 @@ export async function handleEngineCallback(ctx: Context, config: Config, store: 
 
   const target = data.slice(ENGINE_CB_PREFIX.length);
   let newEngine: EngineBackend | null = null;
-  if (target === "claude" || target === "opencode" || target === "agy") {
+  if (target === "claude" || target === "opencode" || target === "agy" || target === "dsh") {
     newEngine = target as EngineBackend;
   }
 
@@ -934,7 +952,10 @@ export async function handleModels(
 /** The engine-specific config default a chat falls back to when it has no
  *  /models pick — mirrors runTurn's model resolution. */
 function engineDefaultModel(config: Config, engine: EngineBackend): string | undefined {
-  return engine === "opencode" ? config.opencode?.model : engine === "agy" ? config.agy?.model : config.claude.model;
+  if (engine === "opencode") return config.opencode?.model;
+  if (engine === "agy") return config.agy?.model;
+  if (engine === "dsh") return config.dsh?.model;
+  return config.claude.model;
 }
 
 /** Refresh an already-sent /models status message after a button tap. */

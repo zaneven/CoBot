@@ -474,8 +474,14 @@ test("renderEngineKeyboard marks active engine including agy", () => {
   assert.ok(rAGy[2]![0]!.text?.includes("✅ Antigravity CLI"));
   assert.equal(rAGy[2]![0]!.callback_data, "engine:agy");
 
+  // dsh sits between agy and the "follow global default" row.
+  const rDsh = rows(renderEngineKeyboard("dsh", "claude"));
+  assert.ok(!rDsh[0]![0]!.text?.includes("✅"));
+  assert.ok(rDsh[3]![0]!.text?.includes("✅ DeepSeek Harness"));
+  assert.equal(rDsh[3]![0]!.callback_data, "engine:dsh");
+
   const rDefault = rows(renderEngineKeyboard(null, "claude"));
-  assert.ok(rDefault[3]![0]!.text?.includes("● 跟随全局默认"));
+  assert.ok(rDefault[4]![0]!.text?.includes("● 跟随全局默认"));
 });
 
 test("handleEngine switches to agy and resets session", async () => {

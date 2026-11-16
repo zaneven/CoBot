@@ -1,5 +1,5 @@
 import type { Api } from "grammy";
-import { type Config, DEFAULT_APPROVAL_SKIP_TOOLS } from "../config.js";
+import { type Config, type EngineBackend, DEFAULT_APPROVAL_SKIP_TOOLS } from "../config.js";
 import type { Store, AuditLog } from "../store/db.js";
 import type { Registry } from "../registry/registry.js";
 import type { PromptInput, PermissionRequest, PermissionDecision, UserDialogRequest, UserDialogResult } from "../claude/types.js";
@@ -85,12 +85,44 @@ export interface RunOutcome {
 export function resolveEngineModel(store: Store, config: Config, chatId: number): { engine: Config["backend"]; model: string | undefined } {
   const binding = store.getBinding(chatId);
   const engine = binding?.engine ?? config.backend;
-  const model = binding?.model ?? (engine === "opencode" ? config.opencode?.model : engine === "agy" ? config.agy?.model : config.claude.model);
+  const model =
+    binding?.model ??
+    (engine === "opencode"
+      ? config.opencode?.model
+      : engine === "agy"
+        ? config.agy?.model
+        : engine === "dsh"
+          ? config.dsh?.model
+          : config.claude.model);
   return { engine, model };
 }
 
+/** Per-task wall-clock timeout for the chat's active engine. */
+export function engineTimeoutMs(engine: EngineBackend, config: Config): number {
+  if (engine === "opencode") return config.opencode?.timeoutMs ?? config.claude.taskTimeoutMs;
+  if (engine === "agy") return config.agy?.timeoutMs ?? config.claude.taskTimeoutMs;
+  if (engine === "dsh") return config.dsh?.timeoutMs ?? config.claude.taskTimeoutMs;
+  return config.claude.taskTimeoutMs;
+}
+
 /**
- * Run one agentic turn (Claude Code or OpenCode): stream the assistant output into the chat and
+ * Sandbox preset exported to the dsh runtime (DSH_PERMISSION_MODE).
+ *
+ * This is process-wide, not per chat: the runtime is spawned once and its
+ * environment cannot change afterwards (ACP exposes no sandbox knob). The safe
+ * default is `workspace-write`, under which bash writes stay inside the project
+ * and anything outside comes back as a permission request — auto-approved
+ * silently, or surfaced as Telegram buttons in interactive mode. Set
+ * `dsh.permissionMode: danger-full-access` (env DSH_PERMISSION_MODE) to drop
+ * confinement entirely; changing it needs a bot restart.
+ */
+export function dshPermissionPreset(engine: EngineBackend, config: Config): string | undefined {
+  if (engine !== "dsh") return undefined;
+  return config.dsh?.permissionMode ?? "workspace-write";
+}
+
+/**
+ * Run one agentic turn: stream the assistant output into the chat and
  * persist the result. Does NOT touch the registry's active/queue state - the
  * caller (runOne) owns start/finish + draining.
  */
@@ -123,7 +155,17 @@ export async function runTurn(opts: {
   // Otherwise the driver falls back to headless auto-approve.
   const approvalCfg = config.claude.approval;
   const chatMode = store.getBinding(chatId)?.approvalMode ?? approvalCfg?.mode ?? "auto";
-  const installApproval = chatMode === "interactive" && origin !== "cron" && !!approvalCfg;
+  // A dsh chat with `dsh.autoApprove: false` gets the approval bridge even in
+  // "auto" mode: dsh fails closed on an unanswered permission prompt, so the
+  // bridge is what turns the runtime's own asks into concrete decisions.
+  const installApproval =
+    (chatMode === "interactive" || (engine === "dsh" && config.dsh?.autoApprove === false)) &&
+    origin !== "cron" &&
+    !!approvalCfg;
+  // Engine defaults this bot layer can satisfy: dsh's ACP permission prompts
+  // are answered by the driver (auto-approve) unless an interactive handler is
+  // installed here. config.dsh.autoApprove=false therefore only bites when the
+  // chat is also in interactive mode; headless stays fail-safe, never parked.
   const canUseToolHandler = installApproval && approvalCfg
     ? (req: PermissionRequest, sig: AbortSignal): Promise<PermissionDecision> =>
         approvalManager.request(req, {
@@ -276,13 +318,16 @@ export async function runTurn(opts: {
           config.claude.permissionMode === "bypassPermissions" && config.claude.allowDangerousSkip,
         maxTurns: config.claude.maxTurns,
         signal: abortSignal,
-         timeoutMs: engine === "opencode" ? (config.opencode?.timeoutMs ?? config.claude.taskTimeoutMs) : engine === "agy" ? (config.agy?.timeoutMs ?? config.claude.taskTimeoutMs) : config.claude.taskTimeoutMs,
+         timeoutMs: engineTimeoutMs(engine, config),
          opencodePath: config.opencode?.path,
          opencodeAutoApprove: config.opencode?.autoApprove,
          agent: engine === "opencode" ? config.opencode?.agent : engine === "agy" ? config.agy?.agent : undefined,
          agyPath: config.agy?.path,
          agyAutoApprove: config.agy?.autoApprove,
          agyEffort: config.agy?.effort,
+         dshPath: config.dsh?.path,
+         dshEffort: config.dsh?.effort,
+         dshPermissionPreset: dshPermissionPreset(engine, config),
         canUseToolHandler,
         userDialogHandler,
       })) {
